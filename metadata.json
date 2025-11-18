@@ -1,5 +1,5 @@
 {
-  "name": "CI&T Smart Dashboard",
-  "description": "A centralized, responsive portal for databricks users to access their dashboards. Features a clean, minimalist design with a focus on performance and best practices in React and data visualization.",
+  "name": "Example Dashboard",
+  "description": "A centralized, responsive portal for showcasing the Example fruit analytics dashboard with a focus on performance and modern data visualization best practices.",
   "requestFramePermissions": []
 }

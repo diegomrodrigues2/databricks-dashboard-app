@@ -25,7 +25,7 @@ const LoginPage: React.FC = () => {
   return (
     <div className="min-h-screen flex items-center justify-center bg-black">
       <div className="p-8 bg-gray-900 border border-gray-700 rounded-lg shadow-lg w-full max-w-sm">
-        <h1 className="text-3xl font-bold text-center text-white mb-2">StoneX Portal</h1>
+        <h1 className="text-3xl font-bold text-center text-white mb-2">Example Portal</h1>
         <p className="text-center text-gray-400 mb-6">Sign in to your account</p>
         <form onSubmit={handleSubmit}>
           <div className="mb-4">

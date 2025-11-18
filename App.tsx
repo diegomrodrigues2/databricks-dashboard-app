@@ -11,7 +11,7 @@ import type { Page } from './types';
 const App: React.FC = () => {
   const { isAuthenticated } = useAuth();
   const [currentPage, setCurrentPage] = useState<Page>('dashboard');
-  const [currentDashboardId, setCurrentDashboardId] = useState<string>('1'); // Default to Project Health
+  const [currentDashboardId, setCurrentDashboardId] = useState<string>('example'); // Default to Example dashboard
 
   if (!isAuthenticated) {
     return <LoginPage />;
