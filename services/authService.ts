@@ -4,8 +4,8 @@ import type { User } from '../types';
 // Mock user data
 const mockUser: User = {
   id: '1',
-  name: 'Admin User',
-  email: 'admin@stonex.com',
+  name: 'Example Admin',
+  email: 'admin@example.com',
   avatarUrl: 'https://picsum.photos/100',
 };
 
