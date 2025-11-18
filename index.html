@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>StoneX Dashboard Portal</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+  <script type="importmap">
+{
+  "imports": {
+    "react-dom/": "https://esm.sh/react-dom@^19.1.1/",
+    "react/": "https://esm.sh/react@^19.1.1/",
+    "react": "https://esm.sh/react@^19.1.1",
+    "d3-array": "https://esm.sh/d3-array@^3.2.4",
+    "d3-scale": "https://esm.sh/d3-scale@^4.0.2",
+    "html-to-image": "https://esm.sh/html-to-image@^1.11.11",
+    "d3-shape": "https://esm.sh/d3-shape@^3.2.0",
+    "d3-time": "https://esm.sh/d3-time@^3.1.0",
+    "react-window": "https://esm.sh/react-window@^1.8.10",
+    "marked": "https://esm.sh/marked@^12.0.2",
+    "d3-dsv": "https://esm.sh/d3-dsv@^3.0.1",
+    "d3-scale-chromatic": "https://esm.sh/d3-scale-chromatic@3.1.0",
+    "xlsx": "https://esm.sh/xlsx@^0.18.5"
+  }
+}
+</script>
+<style>
+      .markdown-content h1, .markdown-content h2, .markdown-content h3 {
+        color: white;
+        margin-bottom: 0.5em;
+        margin-top: 1em;
+        font-weight: 600;
+        border-bottom: 1px solid #4B5563; /* border-gray-600 */
+        padding-bottom: 0.3em;
+      }
+      .markdown-content h1 { font-size: 1.875rem; } /* text-3xl */
+      .markdown-content h2 { font-size: 1.5rem; } /* text-2xl */
+      .markdown-content h3 { font-size: 1.25rem; } /* text-xl */
+      .markdown-content p {
+        color: #D1D5DB; /* text-gray-300 */
+        line-height: 1.6;
+        margin-bottom: 1em;
+      }
+      .markdown-content ul, .markdown-content ol {
+        color: #D1D5DB; /* text-gray-300 */
+        padding-left: 1.5em;
+        margin-bottom: 1em;
+      }
+      .markdown-content li {
+        margin-bottom: 0.5em;
+      }
+      .markdown-content ul { list-style-type: disc; }
+      .markdown-content ol { list-style-type: decimal; }
+      .markdown-content a {
+        color: #60A5FA; /* text-blue-400 */
+        text-decoration: underline;
+      }
+      .markdown-content a:hover {
+        color: #93C5FD; /* text-blue-300 */
+      }
+      .markdown-content code {
+        background-color: #374151; /* bg-gray-700 */
+        color: #FBBF24; /* text-amber-400 */
+        padding: 0.2em 0.4em;
+        border-radius: 0.25rem;
+        font-family: monospace;
+      }
+      .markdown-content pre {
+        background-color: #1F2937; /* bg-gray-800 */
+        padding: 1em;
+        border-radius: 0.5rem;
+        overflow-x: auto;
+        margin-bottom: 1em;
+      }
+      .markdown-content pre code {
+        background-color: transparent;
+        padding: 0;
+      }
+       .markdown-content blockquote {
+        border-left: 4px solid #6B7280; /* border-gray-500 */
+        padding-left: 1em;
+        margin-left: 0;
+        margin-bottom: 1em;
+        color: #9CA3AF; /* text-gray-400 */
+        font-style: italic;
+      }
+      .markdown-content table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-bottom: 1em;
+      }
+      .markdown-content th, .markdown-content td {
+        border: 1px solid #4B5563; /* border-gray-600 */
+        padding: 0.5em 1em;
+        color: #D1D5DB; /* text-gray-300 */
+      }
+      .markdown-content th {
+        background-color: #374151; /* bg-gray-700 */
+        font-weight: 600;
+        color: white;
+      }
+      /* Style for date picker in dark mode */
+      input[type="date"] {
+        color-scheme: dark;
+      }
+      input[type="date"]::-webkit-calendar-picker-indicator {
+        cursor: pointer;
+        filter: invert(0.8) brightness(0.9);
+      }
+      main > div.container:has(.spreadsheet-container) {
+        max-width: 100%;
+        padding: 0;
+      }
+    </style>
+</head>
+  <body class="bg-gray-900 text-white">
+    <div id="root"></div>
+    <script type="module" src="/index.tsx"></script>
+  </body>
+</html>
