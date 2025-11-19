@@ -9,9 +9,10 @@ interface KPIComponentProps {
   data: any[];
   onWidgetClick?: (config: WidgetConfig) => void;
   onSeeData: () => void;
+  onExportToDashboard?: (dashboardId: string, newDashboardName?: string) => void;
 }
 
-const KPIComponent: React.FC<KPIComponentProps> = ({ config, data, onWidgetClick, onSeeData }) => {
+const KPIComponent: React.FC<KPIComponentProps> = ({ config, data, onWidgetClick, onSeeData, onExportToDashboard }) => {
   const widgetRef = useRef<HTMLDivElement>(null);
 
   const mainValue = useMemo(() => {
@@ -54,7 +55,7 @@ const KPIComponent: React.FC<KPIComponentProps> = ({ config, data, onWidgetClick
       onClick={() => isClickable && onWidgetClick?.(config)}
       aria-label={isClickable ? `Filter by ${config.title}` : config.title}
     >
-      <WidgetExportDropdown onExportCsv={handleExportCsv} onExportPng={handleExportPng} onSeeData={onSeeData} />
+      <WidgetExportDropdown onExportCsv={handleExportCsv} onExportPng={handleExportPng} onSeeData={onSeeData} onExportToDashboard={onExportToDashboard} />
       <div>
         <h4 className="text-lg font-semibold text-white pr-8">{config.title}</h4>
         <p className="text-sm text-gray-400">{config.description}</p>

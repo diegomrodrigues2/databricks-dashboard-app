@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { WidgetConfig } from '../../types';
-import { getDataForSource, getDashboardConfig } from '../../services/dashboardService';
+import { getDataForSource, getDashboardConfig, createDashboard, addWidgetToDashboard } from '../../services/dashboardService';
 import { useSpreadsheet } from '../../hooks/useSpreadsheet';
 import BarChartComponent from '../charts/BarChartComponent';
 import LineChartComponent from '../charts/LineChartComponent';
@@ -45,8 +45,9 @@ export const DynamicWidgetRenderer: React.FC<DynamicWidgetRendererProps> = ({ co
     const handleSeeData = async () => {
         try {
             // Get the dashboard config to check if datasource is editable
-            const dashboardConfig = await getDashboardConfig('example');
-            const dataSourceConfig = dashboardConfig.datasources.find(ds => ds.name === config.dataSource);
+            // NOTE: This hardcoded 'example' fallback might need adjustment based on context
+            const dashboardConfig = await getDashboardConfig('example').catch(() => null);
+            const dataSourceConfig = dashboardConfig?.datasources.find(ds => ds.name === config.dataSource);
             const isEditable = dataSourceConfig?.enableInlineEditing ?? false;
             
             openSpreadsheet(config.title || 'Data', data, isEditable);
@@ -54,6 +55,23 @@ export const DynamicWidgetRenderer: React.FC<DynamicWidgetRendererProps> = ({ co
             console.error("Failed to open spreadsheet:", err);
             // Fallback: open without checking editability
             openSpreadsheet(config.title || 'Data', data, false);
+        }
+    };
+
+    const handleExportToDashboard = async (dashboardId: string, newDashboardName?: string) => {
+        try {
+            let targetDashboardId = dashboardId;
+            
+            if (dashboardId === 'new' && newDashboardName) {
+                const newDashboard = await createDashboard(newDashboardName);
+                targetDashboardId = newDashboard.id;
+            }
+            
+            await addWidgetToDashboard(targetDashboardId, config);
+            alert('Widget added to dashboard successfully!');
+        } catch (err) {
+            console.error("Failed to export widget to dashboard:", err);
+            alert('Failed to add widget to dashboard.');
         }
     };
 
@@ -78,6 +96,7 @@ export const DynamicWidgetRenderer: React.FC<DynamicWidgetRendererProps> = ({ co
         const commonProps = {
              data,
              onSeeData: handleSeeData,
+             onExportToDashboard: handleExportToDashboard,
              width: 400, // Fixed width for chat bubble constraint
              height: 250
         };

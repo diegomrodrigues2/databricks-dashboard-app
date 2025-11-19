@@ -620,10 +620,35 @@ export interface WidgetPart {
   config: WidgetConfig;
 }
 
+export interface ToolCall {
+  id: string;
+  functionName: string;
+  arguments: Record<string, any>;
+  status: 'pending' | 'completed' | 'failed';
+}
+
+export interface ToolResult {
+  toolCallId: string;
+  result: any;
+  error?: string;
+}
+
 export interface Message {
   id: string;
-  role: 'user' | 'assistant';
+  role: 'user' | 'assistant' | 'system';
   content: string;
   timestamp: Date;
   parsedParts?: (TextPart | WidgetPart)[];
+  reasoning?: string;
+  toolCalls?: ToolCall[];
+  toolResults?: ToolResult[];
+  widgetConfigSnapshot?: WidgetConfig;
+}
+
+export interface Session {
+  id: string;
+  title: string;
+  messages: Message[];
+  createdAt: number;
+  updatedAt: number;
 }

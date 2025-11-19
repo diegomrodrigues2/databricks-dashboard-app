@@ -15,6 +15,7 @@ interface LineChartComponentProps {
   activeFilters: { [key: string]: any };
   isPanelItem?: boolean;
   onSeeData?: () => void;
+  onExportToDashboard?: (dashboardId: string, newDashboardName?: string) => void;
   width?: number;
   height?: number;
 }
@@ -31,7 +32,7 @@ interface TooltipData {
     series: { name: string; value: number; color: string }[];
 }
 
-const LineChartComponent: React.FC<LineChartComponentProps> = ({ config, data, onCategoryClick, activeFilters, isPanelItem = false, onSeeData, width: propWidth, height: propHeight }) => {
+const LineChartComponent: React.FC<LineChartComponentProps> = ({ config, data, onCategoryClick, activeFilters, isPanelItem = false, onSeeData, onExportToDashboard, width: propWidth, height: propHeight }) => {
     const chartContainerRef = useRef<HTMLDivElement>(null);
     const [tooltip, setTooltip] = useState<TooltipData | null>(null);
     const [hoveredSeriesKey, setHoveredSeriesKey] = useState<string | null>(null);
@@ -169,7 +170,7 @@ const LineChartComponent: React.FC<LineChartComponentProps> = ({ config, data, o
 
         return (
             <div ref={chartContainerRef} className={`${gridClasses} p-6 bg-gray-900 border border-gray-700 rounded-lg flex flex-col relative`}>
-                {onSeeData && <WidgetExportDropdown onExportCsv={handleExportCsv} onExportPng={handleExportPng} onSeeData={onSeeData} />}
+                {onSeeData && <WidgetExportDropdown onExportCsv={handleExportCsv} onExportPng={handleExportPng} onSeeData={onSeeData} onExportToDashboard={onExportToDashboard} />}
                 <div>
                     <h4 className="text-xl font-serif font-semibold text-white pr-8">{config.title}</h4>
                     <p className="text-md font-serif text-gray-400 mb-4">{config.description}</p>
@@ -335,7 +336,7 @@ const LineChartComponent: React.FC<LineChartComponentProps> = ({ config, data, o
     
     return (
         <div ref={chartContainerRef} className={mainContainerClasses}>
-            {!isPanelItem && onSeeData && <WidgetExportDropdown onExportCsv={handleExportCsv} onExportPng={handleExportPng} onSeeData={onSeeData} />}
+            {!isPanelItem && onSeeData && <WidgetExportDropdown onExportCsv={handleExportCsv} onExportPng={handleExportPng} onSeeData={onSeeData} onExportToDashboard={onExportToDashboard} />}
             <div className={isPanelItem ? 'text-center' : ''}>
               <h4 className={`font-serif font-semibold text-white pr-8 ${isPanelItem ? 'text-lg' : 'text-xl'}`}>{config.title}</h4>
               {!isPanelItem && <p className="text-md font-serif text-gray-400 mb-4">{config.description}</p>}

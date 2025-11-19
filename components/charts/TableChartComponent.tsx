@@ -10,9 +10,10 @@ interface TableChartComponentProps {
   data: any[];
   onCategoryClick?: (column: string, value:string) => void;
   onSeeData: () => void;
+  onExportToDashboard?: (dashboardId: string, newDashboardName?: string) => void;
 }
 
-const TableChartComponent: React.FC<TableChartComponentProps> = ({ config, data, onCategoryClick, onSeeData }) => {
+const TableChartComponent: React.FC<TableChartComponentProps> = ({ config, data, onCategoryClick, onSeeData, onExportToDashboard }) => {
     const chartContainerRef = useRef<HTMLDivElement>(null);
     const [hoveredRowCategory, setHoveredRowCategory] = useState<string | null>(null);
 
@@ -68,7 +69,7 @@ const TableChartComponent: React.FC<TableChartComponentProps> = ({ config, data,
 
     return (
         <div ref={chartContainerRef} className={`${gridClasses} p-6 bg-gray-900 border border-gray-700 rounded-lg flex flex-col relative`}>
-            <WidgetExportDropdown onExportCsv={handleExportCsv} onExportPng={handleExportPng} onSeeData={onSeeData} />
+            <WidgetExportDropdown onExportCsv={handleExportCsv} onExportPng={handleExportPng} onSeeData={onSeeData} onExportToDashboard={onExportToDashboard} />
             <div>
                 <h4 className="text-xl font-serif font-semibold text-white pr-8">{config.title}</h4>
                 <p className="text-md font-serif text-gray-400">{config.description}</p>

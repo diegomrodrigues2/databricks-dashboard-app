@@ -11,13 +11,14 @@ interface BarChartComponentProps {
   data: any[];
   onCategoryClick?: (column: string, value: string) => void;
   onSeeData: () => void;
+  onExportToDashboard?: (dashboardId: string, newDashboardName?: string) => void;
   width?: number;
   height?: number;
 }
 
 const COLORS = ['#FF6B6B', '#FFE66D', '#4ECDC4', '#55C6A9', '#F7B801', '#A37774', '#F45B69'];
 
-const BarChartComponent: React.FC<BarChartComponentProps> = ({ config, data, onCategoryClick, onSeeData, width: propWidth, height: propHeight }) => {
+const BarChartComponent: React.FC<BarChartComponentProps> = ({ config, data, onCategoryClick, onSeeData, onExportToDashboard, width: propWidth, height: propHeight }) => {
     const chartContainerRef = useRef<HTMLDivElement>(null);
     const [hoveredBar, setHoveredBar] = useState<{ category: string; colorCategory?: string } | null>(null);
     const [tooltip, setTooltip] = useState<{ x: number; y: number; category: string; value: number; colorCategory?: string } | null>(null);
@@ -201,7 +202,7 @@ const BarChartComponent: React.FC<BarChartComponentProps> = ({ config, data, onC
 
     return (
         <div ref={chartContainerRef} className={`${gridClasses} p-6 bg-gray-900 border border-gray-700 rounded-lg flex flex-col relative`}>
-            <WidgetExportDropdown onExportCsv={handleExportCsv} onExportPng={handleExportPng} onSeeData={onSeeData} />
+            <WidgetExportDropdown onExportCsv={handleExportCsv} onExportPng={handleExportPng} onSeeData={onSeeData} onExportToDashboard={onExportToDashboard} />
             <div>
                 <h4 className="text-lg font-semibold text-white pr-8">{config.title}</h4>
                 <p className="text-sm text-gray-400 mb-4">{config.description}</p>

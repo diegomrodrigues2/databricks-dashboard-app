@@ -15,7 +15,7 @@ export async function streamChatResponse(
   const USE_MOCK = true;
 
   if (USE_MOCK) {
-    await streamMockResponse(onChunk);
+    await streamMockResponse(messages, onChunk);
     return;
   }
 
@@ -94,121 +94,160 @@ export async function streamChatResponse(
 
 const MOCK_DELAY_MS = 15; // Faster typing for better DX
 
-interface MockResponse {
-    prefix: string;
-    config: any; // WidgetConfig
-    suffix: string;
+interface MockScenario {
+    steps: string[]; // Step 0: Thought+Command, Step 1: Response+Widget
 }
 
-const MOCK_SCENARIOS: MockResponse[] = [
+const MOCK_SCENARIOS: MockScenario[] = [
     {
-        prefix: "Based on the revenue data, here is the quarterly breakdown. You can see how specific quarters contributed to the total growth.\n\n",
-        config: {
-            type: 'waterfall',
-            dataSource: 'mango_revenue',
-            title: 'Mango Revenue Analysis',
-            description: 'Quarterly revenue changes showing net growth.',
-            categoryColumn: 'period',
-            valueColumn: 'change',
-            totalCategories: ['Q1 2023', 'Q1 2025'],
-            positiveColor: '#3B82F6',
-            negativeColor: '#EF4444',
-            totalColor: '#6B7280',
-            gridWidth: 12
-        },
-        suffix: "\n\nNotice the dip in Q3 2023. This correlates with the seasonal supply shortage we discussed earlier."
+        steps: [
+            // Step 1: Thought and Command
+            `<thought>
+The user wants to analyze mango revenue trends. 
+I should first check the 'mango_revenue' table to get the quarterly data.
+Then, I'll calculate the quarter-over-quarter growth to highlight significant changes.
+A waterfall chart is the best visualization for showing positive and negative contributions to the total.
+</thought>
+<command tool="searchData">
+{ "dataSource": "mango_revenue", "query": "quarterly revenue changes" }
+</command>`,
+            
+            // Step 2: Final Response
+            `Based on the revenue data, here is the quarterly breakdown. You can see how specific quarters contributed to the total growth.
+
+${WIDGET_START_TOKEN}
+{
+    "type": "waterfall",
+    "dataSource": "mango_revenue",
+    "title": "Mango Revenue Analysis",
+    "description": "Quarterly revenue changes showing net growth.",
+    "categoryColumn": "period",
+    "valueColumn": "change",
+    "totalCategories": ["Q1 2023", "Q1 2025"],
+    "positiveColor": "#3B82F6",
+    "negativeColor": "#EF4444",
+    "totalColor": "#6B7280",
+    "gridWidth": 12
+}
+${WIDGET_END_TOKEN}
+
+Notice the dip in Q3 2023. This correlates with the seasonal supply shortage we discussed earlier.`
+        ]
     },
     {
-        prefix: "I've plotted the sweetness against juiciness for all our fruits. This should help identify which fruits fit the 'sweet and juicy' profile.\n\n",
-        config: {
-            type: 'scatter',
-            dataSource: 'fruit_taste_data',
-            title: 'Taste Profile: Sweetness vs Juiciness',
-            description: 'Correlation between sweetness and juiciness scores (0-10).',
-            xColumn: 'sweetness',
-            yColumn: 'juiciness',
-            labelColumn: 'fruit',
-            pointRadius: 6,
-            xAxisLabel: 'Sweetness',
-            yAxisLabel: 'Juiciness',
-            gridWidth: 12
-        },
-        suffix: "\n\nMangoes and Strawberries are clearly in the top-right quadrant, indicating they are both very sweet and juicy."
+        steps: [
+            // Step 1
+            `<thought>
+The user is asking for a correlation analysis between sweetness and juiciness.
+I need to query the 'fruit_taste_data' table which contains these metrics for all fruits.
+A scatter plot is the standard tool for visualizing the relationship between two continuous variables.
+I will also highlight the 'sweet and juicy' quadrant (high sweetness, high juiciness).
+</thought>
+<command tool="searchData">
+{ "dataSource": "fruit_taste_data", "query": "sweetness and juiciness by fruit" }
+</command>`,
+
+            // Step 2
+            `I've plotted the sweetness against juiciness for all our fruits. This should help identify which fruits fit the 'sweet and juicy' profile.
+
+${WIDGET_START_TOKEN}
+{
+    "type": "scatter",
+    "dataSource": "fruit_taste_data",
+    "title": "Taste Profile: Sweetness vs Juiciness",
+    "description": "Correlation between sweetness and juiciness scores (0-10).",
+    "xColumn": "sweetness",
+    "yColumn": "juiciness",
+    "labelColumn": "fruit",
+    "pointRadius": 6,
+    "xAxisLabel": "Sweetness",
+    "yAxisLabel": "Juiciness",
+    "gridWidth": 12
+}
+${WIDGET_END_TOKEN}
+
+Mangoes and Strawberries are clearly in the top-right quadrant, indicating they are both very sweet and juicy.`
+        ]
     },
     {
-        prefix: "Here is the sales distribution across different regions. Asia is currently our largest market.\n\n",
-        config: {
-            type: 'donut',
-            dataSource: 'fruit_sales_by_region',
-            title: 'Global Sales Distribution',
-            description: 'Breakdown of sales revenue by region.',
-            categoryColumn: 'region',
-            valueColumn: 'sales',
-            showLabels: 'percent',
-            showLegend: true,
-            centerText: 'Total',
-            gridWidth: 8
-        },
-        suffix: "\n\nWould you like to see a breakdown of the 'Asia' region specifically?"
-    },
-    {
-        prefix: "Here is the detailed data table you requested, showing average sales, price, and taste metrics for each fruit.\n\n",
-        config: {
-            type: 'table',
-            dataSource: 'fruit_taste_data',
-            title: 'Detailed Fruit Metrics',
-            description: 'Comprehensive view of sales and taste attributes.',
-            rowCategoryColumn: 'fruit',
-            gridWidth: 12,
-            columns: [
-                { key: 'avg_sales', header: 'Avg Sales', format: 'number' },
-                { key: 'avg_price', header: 'Avg Price', format: 'currency', currencySymbol: '$' },
-                { key: 'sweetness', header: 'Sweetness' },
-                { key: 'juiciness', header: 'Juiciness' }
-            ],
-            conditionalFormatting: [
-                 { column: 'avg_sales', type: 'data-bar', color: '#3B82F6' }
-            ]
-        },
-        suffix: "\n\nYou can export this table to CSV if you need to perform further analysis in Excel."
+        steps: [
+            // Step 1
+            `<thought>
+The user wants a detailed breakdown of fruit metrics (sales, price, taste).
+A tabular view is most appropriate here to show multiple dimensions at once.
+I will fetch data from 'fruit_taste_data' and format the columns appropriately (currency for price, number for sales).
+I'll add a data bar to the sales column to make it easier to scan for high performers.
+</thought>
+<command tool="searchData">
+{ "dataSource": "fruit_taste_data", "query": "all metrics" }
+</command>`,
+
+            // Step 2
+            `Here is the detailed data table you requested, showing average sales, price, and taste metrics for each fruit.
+
+${WIDGET_START_TOKEN}
+{
+    "type": "table",
+    "dataSource": "fruit_taste_data",
+    "title": "Detailed Fruit Metrics",
+    "description": "Comprehensive view of sales and taste attributes.",
+    "rowCategoryColumn": "fruit",
+    "gridWidth": 12,
+    "columns": [
+        { "key": "avg_sales", "header": "Avg Sales", "format": "number" },
+        { "key": "avg_price", "header": "Avg Price", "format": "currency", "currencySymbol": "$" },
+        { "key": "sweetness", "header": "Sweetness" },
+        { "key": "juiciness", "header": "Juiciness" }
+    ],
+    "conditionalFormatting": [
+            { "column": "avg_sales", "type": "data-bar", "color": "#3B82F6" }
+    ]
+}
+${WIDGET_END_TOKEN}
+
+You can export this table to CSV if you need to perform further analysis in Excel.`
+        ]
     }
 ];
 
 let lastScenarioIndex = -1;
 
-async function streamMockResponse(onChunk: (chunk: string) => void) {
-  // Cyclic selection to ensure we see all types
-  let nextIndex = (lastScenarioIndex + 1) % MOCK_SCENARIOS.length;
-  lastScenarioIndex = nextIndex;
+async function streamMockResponse(messages: Message[], onChunk: (chunk: string) => void) {
+  const lastMsg = messages[messages.length - 1];
   
-  const scenario = MOCK_SCENARIOS[nextIndex];
+  // Check if the last message is a tool result (System message)
+  // In our plan, we decided to use 'system' role for tool results
+  const isToolResult = lastMsg.role === 'system'; // Simple heuristic for now
 
-  // 1. Stream Prefix
-  const prefixTokens = splitIntoTokens(scenario.prefix);
-  for (const token of prefixTokens) {
-    await new Promise(resolve => setTimeout(resolve, MOCK_DELAY_MS));
-    onChunk(token);
+  let scenarioIndex;
+  let stepIndex;
+
+  if (!isToolResult) {
+      // This is a new user request, pick the next scenario
+      scenarioIndex = (lastScenarioIndex + 1) % MOCK_SCENARIOS.length;
+      lastScenarioIndex = scenarioIndex;
+      stepIndex = 0;
+  } else {
+      // This is a continuation (tool result), use the current scenario
+      scenarioIndex = lastScenarioIndex;
+      if (scenarioIndex === -1) scenarioIndex = 0; // Fallback
+      stepIndex = 1;
   }
 
-  // 2. Stream Widget
-  await new Promise(resolve => setTimeout(resolve, MOCK_DELAY_MS));
-  onChunk(WIDGET_START_TOKEN);
+  const scenario = MOCK_SCENARIOS[scenarioIndex];
+  // Ensure we don't go out of bounds if a scenario is missing a step (though all have 2)
+  const content = scenario.steps[stepIndex] || "Error: Missing mock step.";
   
-  // Stream JSON slightly faster or in larger chunks
-  const jsonString = JSON.stringify(scenario.config, null, 2);
-  onChunk(jsonString); // Sending whole JSON at once for simplicity in mock, or split it if needed
-  
-  onChunk(WIDGET_END_TOKEN);
+  const tokens = splitIntoTokens(content);
 
-  // 3. Stream Suffix
-  const suffixTokens = splitIntoTokens(scenario.suffix);
-  for (const token of suffixTokens) {
+  for (const token of tokens) {
     await new Promise(resolve => setTimeout(resolve, MOCK_DELAY_MS));
     onChunk(token);
   }
 }
 
 function splitIntoTokens(text: string): string[] {
-    // crude tokenization for effect
-    return text.split(/(\s+)/);
+    // improved tokenization to keep tags intact or split appropriately
+    // splitting by spaces is crude but sufficient for mock visuals
+    return text.split(/(\s+|<[^>]+>)/).filter(Boolean);
 }

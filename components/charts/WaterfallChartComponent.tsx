@@ -10,6 +10,7 @@ interface WaterfallChartComponentProps {
   data: any[];
   onCategoryClick?: (column: string, value: string) => void;
   onSeeData: () => void;
+  onExportToDashboard?: (dashboardId: string, newDashboardName?: string) => void;
 }
 
 interface ProcessedWaterfallData {
@@ -21,7 +22,7 @@ interface ProcessedWaterfallData {
     percentage?: number;
 }
 
-const WaterfallChartComponent: React.FC<WaterfallChartComponentProps> = ({ config, data, onCategoryClick, onSeeData }) => {
+const WaterfallChartComponent: React.FC<WaterfallChartComponentProps> = ({ config, data, onCategoryClick, onSeeData, onExportToDashboard }) => {
     const chartContainerRef = useRef<HTMLDivElement>(null);
     const [tooltip, setTooltip] = useState<{ x: number; y: number; data: ProcessedWaterfallData } | null>(null);
     const [hoveredCategory, setHoveredCategory] = useState<string | null>(null);
@@ -136,7 +137,7 @@ const WaterfallChartComponent: React.FC<WaterfallChartComponentProps> = ({ confi
 
     return (
         <div ref={chartContainerRef} className={`${gridClasses} p-6 bg-gray-900 border border-gray-700 rounded-lg flex flex-col relative`}>
-            <WidgetExportDropdown onExportCsv={handleExportCsv} onExportPng={handleExportPng} onSeeData={onSeeData} />
+            <WidgetExportDropdown onExportCsv={handleExportCsv} onExportPng={handleExportPng} onSeeData={onSeeData} onExportToDashboard={onExportToDashboard} />
             <div>
                 <h4 className="text-lg font-semibold text-white pr-8">{config.title}</h4>
                 <p className="text-sm text-gray-400 mb-4">{config.description}</p>

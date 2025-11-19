@@ -10,12 +10,13 @@ interface ScatterPlotComponentProps {
   data: any[];
   onCategoryClick?: (column: string, value: string) => void;
   onSeeData: () => void;
+  onExportToDashboard?: (dashboardId: string, newDashboardName?: string) => void;
   activeFilters?: { [key: string]: any };
 }
 
 const DEFAULT_COLORS = ['#4e79a7', '#f28e2c', '#e15759', '#76b7b2', '#59a14f', '#edc949', '#af7aa1', '#ff9da7', '#9c755f', '#bab0ab'];
 
-const ScatterPlotComponent: React.FC<ScatterPlotComponentProps> = ({ config, data, onCategoryClick, onSeeData, activeFilters = {} }) => {
+const ScatterPlotComponent: React.FC<ScatterPlotComponentProps> = ({ config, data, onCategoryClick, onSeeData, onExportToDashboard, activeFilters = {} }) => {
     const chartContainerRef = useRef<HTMLDivElement>(null);
     const [tooltip, setTooltip] = useState<{ x: number; y: number; item: any } | null>(null);
     const [hoveredLabel, setHoveredLabel] = useState<string | null>(null);
@@ -159,7 +160,7 @@ const ScatterPlotComponent: React.FC<ScatterPlotComponentProps> = ({ config, dat
 
     return (
         <div ref={chartContainerRef} className={`${gridClasses} p-6 bg-gray-900 border border-gray-700 rounded-lg flex flex-col relative`}>
-            <WidgetExportDropdown onExportCsv={handleExportCsv} onExportPng={handleExportPng} onSeeData={onSeeData} />
+            <WidgetExportDropdown onExportCsv={handleExportCsv} onExportPng={handleExportPng} onSeeData={onSeeData} onExportToDashboard={onExportToDashboard} />
             <div>
                 <h4 className="text-xl font-semibold text-white pr-8">{config.title}</h4>
                 <p className="text-md text-gray-400 mb-4">{config.description}</p>

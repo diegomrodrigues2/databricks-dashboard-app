@@ -1,5 +1,12 @@
-import type { Dashboard, AppConfig } from '../types';
+import type { Dashboard, AppConfig, WidgetConfig } from '../types';
 import { fruitSalesDashboardConfig } from './dashboards/fruitSales';
+import {
+    getAllDashboards,
+    getDashboard,
+    saveDashboard,
+    deleteDashboard as deleteDashboardFromStorage,
+    StoredDashboard
+} from './dashboardStorageService';
 import {
     getFruitSalesData,
     getLollipopFruitSalesData,
@@ -25,29 +32,71 @@ import {
     getFruitBasketCorpStockData,
 } from './dashboards/fruitSales';
 
-const mockDashboards: Dashboard[] = [
-  { id: 'example', title: 'Example Dashboard', type: 'dashboard' },
-  { id: 'chat', title: 'Example Chat', type: 'chat' },
-];
-
-export const getDashboards = (): Promise<Dashboard[]> => {
-  return new Promise((resolve) => {
-    setTimeout(() => {
-      resolve(mockDashboards);
-    }, 500);
-  });
+export const getDashboards = async (): Promise<Dashboard[]> => {
+    const storedDashboards = await getAllDashboards();
+    return storedDashboards.map(d => d.meta);
 };
 
-export const getDashboardConfig = (id: string): Promise<AppConfig> => {
-    return new Promise((resolve, reject) => {
-        setTimeout(() => {
-            if (id === 'example') {
-                resolve(fruitSalesDashboardConfig);
-            } else {
-                reject(new Error("Dashboard not found"));
+export const getDashboardConfig = async (id: string): Promise<AppConfig> => {
+    const stored = await getDashboard(id);
+    if (stored) {
+        return stored.config;
+    }
+    throw new Error("Dashboard not found");
+};
+
+export const createDashboard = async (title: string): Promise<Dashboard> => {
+    const id = crypto.randomUUID();
+    const now = Date.now();
+    const newDashboard: StoredDashboard = {
+        id,
+        meta: { id, title, type: 'dashboard' },
+        config: {
+            name: title,
+            version: '1.0.0',
+            datasources: [], // You might want to default some datasources or allow adding them later
+            dashboard: {
+                title,
+                widgets: []
             }
-        }, 200);
-    });
+        },
+        createdAt: now,
+        updatedAt: now
+    };
+    await saveDashboard(newDashboard);
+    return newDashboard.meta;
+};
+
+export const renameDashboard = async (id: string, newTitle: string): Promise<void> => {
+    const stored = await getDashboard(id);
+    if (!stored) throw new Error("Dashboard not found");
+
+    stored.meta.title = newTitle;
+    stored.config.dashboard.title = newTitle;
+    stored.updatedAt = Date.now();
+
+    await saveDashboard(stored);
+};
+
+export const deleteDashboard = async (id: string): Promise<void> => {
+    await deleteDashboardFromStorage(id);
+};
+
+export const addWidgetToDashboard = async (dashboardId: string, widgetConfig: WidgetConfig): Promise<void> => {
+    const stored = await getDashboard(dashboardId);
+    if (!stored) throw new Error("Dashboard not found");
+
+    // Create a deep copy of the widget config to avoid reference issues
+    const newWidget = JSON.parse(JSON.stringify(widgetConfig));
+    
+    // Ensure unique ID for the widget
+    newWidget.id = crypto.randomUUID();
+
+    // Add to dashboard widgets
+    stored.config.dashboard.widgets.push(newWidget);
+    stored.updatedAt = Date.now();
+
+    await saveDashboard(stored);
 };
 
 export const getDataForSource = (sourceName: string): Promise<any[]> => {

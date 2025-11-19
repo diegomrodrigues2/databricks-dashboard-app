@@ -13,11 +13,12 @@ interface PieChartComponentProps {
   // This prop is used by the ChartPanelComponent to render a more compact version
   isPanelItem?: boolean;
   onSeeData?: () => void;
+  onExportToDashboard?: (dashboardId: string, newDashboardName?: string) => void;
 }
 
 const DEFAULT_COLORS = ['#E45646', '#FBDE5C', '#FADDC9', '#4ECDC4', '#55C6A9', '#F7B801', '#A37774'];
 
-const PieChartComponent: React.FC<PieChartComponentProps> = ({ config, data, onCategoryClick, isPanelItem = false, onSeeData }) => {
+const PieChartComponent: React.FC<PieChartComponentProps> = ({ config, data, onCategoryClick, isPanelItem = false, onSeeData, onExportToDashboard }) => {
     const chartContainerRef = useRef<HTMLDivElement>(null);
     const [hoveredSlice, setHoveredSlice] = useState<string | null>(null);
     const [tooltip, setTooltip] = useState<{ x: number; y: number; category: string; value: number; percent: number; } | null>(null);
@@ -122,7 +123,7 @@ const PieChartComponent: React.FC<PieChartComponentProps> = ({ config, data, onC
 
     return (
         <div ref={chartContainerRef} className={mainContainerClasses}>
-            {!isPanelItem && onSeeData && <WidgetExportDropdown onExportCsv={handleExportCsv} onExportPng={handleExportPng} onSeeData={onSeeData} />}
+            {!isPanelItem && onSeeData && <WidgetExportDropdown onExportCsv={handleExportCsv} onExportPng={handleExportPng} onSeeData={onSeeData} onExportToDashboard={onExportToDashboard} />}
             <div className={isPanelItem ? 'text-center' : ''}>
                 <h4 className={`font-semibold text-white pr-8 ${isPanelItem ? 'text-xl mb-2' : 'text-lg'}`}>{config.title}</h4>
                 {!isPanelItem && <p className="text-sm text-gray-400 mb-4">{config.description}</p>}

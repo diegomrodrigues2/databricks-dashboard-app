@@ -1,6 +1,6 @@
-
 import React, { useState } from 'react';
 import { useAuth } from './hooks/useAuth';
+import { useChat } from './hooks/useChat';
 import { useSpreadsheet } from './hooks/useSpreadsheet';
 import LoginPage from './pages/LoginPage';
 import DashboardPage from './pages/DashboardPage';
@@ -14,6 +14,7 @@ import type { Page } from './types';
 const App: React.FC = () => {
   const { isAuthenticated } = useAuth();
   const { spreadsheetView, closeSpreadsheet } = useSpreadsheet();
+  const { loadSession, createNewSession } = useChat();
   const [currentPage, setCurrentPage] = useState<Page>('dashboard');
   const [currentDashboardId, setCurrentDashboardId] = useState<string>('example'); // Default to Example dashboard
 
@@ -23,8 +24,19 @@ const App: React.FC = () => {
 
   const handleNavigate = (page: Page, dashboardId?: string) => {
     setCurrentPage(page);
-    if (dashboardId) {
-      setCurrentDashboardId(dashboardId);
+    
+    if (page === 'chat') {
+        if (dashboardId === 'new') {
+            createNewSession();
+            setCurrentDashboardId('new');
+        } else if (dashboardId) {
+            loadSession(dashboardId);
+            setCurrentDashboardId(dashboardId);
+        }
+    } else {
+        if (dashboardId) {
+          setCurrentDashboardId(dashboardId);
+        }
     }
   };
 
