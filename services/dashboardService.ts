@@ -26,7 +26,8 @@ import {
 } from './dashboards/fruitSales';
 
 const mockDashboards: Dashboard[] = [
-  { id: 'example', title: 'Example Dashboard' },
+  { id: 'example', title: 'Example Dashboard', type: 'dashboard' },
+  { id: 'chat', title: 'Example Chat', type: 'chat' },
 ];
 
 export const getDashboards = (): Promise<Dashboard[]> => {

@@ -11,9 +11,10 @@ export interface Dashboard {
   id: string;
   title: string;
   section?: string;
+  type?: 'dashboard' | 'chat'; // 'dashboard' is default, 'chat' opens chat overlay
 }
 
-export type Page = 'dashboard' | 'profile' | 'config';
+export type Page = 'dashboard' | 'profile' | 'config' | 'chat';
 
 export type AggregationType = 'avg' | 'max' | 'min' | 'sum' | 'count' | 'count_distinct';
 
@@ -605,4 +606,24 @@ export interface AppConfig {
   version: string;
   datasources: DataSource[];
   dashboard: DashboardLayout;
+}
+
+// --- Chat Types ---
+
+export interface TextPart {
+  type: 'text';
+  content: string;
+}
+
+export interface WidgetPart {
+  type: 'widget';
+  config: WidgetConfig;
+}
+
+export interface Message {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: Date;
+  parsedParts?: (TextPart | WidgetPart)[];
 }

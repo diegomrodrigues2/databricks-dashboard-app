@@ -4,6 +4,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { getDashboards } from '../services/dashboardService';
 import type { Dashboard, Page } from '../types';
 import { DashboardIcon } from './icons/DashboardIcon';
+import { DocumentTextIcon } from './icons/DocumentTextIcon';
 import { ChevronDoubleLeftIcon } from './icons/ChevronDoubleLeftIcon';
 import { ChevronDownIcon } from './icons/ChevronDownIcon';
 
@@ -71,19 +72,37 @@ const Sidebar: React.FC<SidebarProps> = ({ currentPage, currentDashboardId, onNa
       });
   };
 
-  const navItemClasses = (dashboardId: string) =>
+  const navItemClasses = (dashboardId: string, dashboardType?: 'dashboard' | 'chat') =>
     `flex items-center p-3 my-1 rounded-lg cursor-pointer transition-colors duration-200 w-full ${
-      currentPage === 'dashboard' && currentDashboardId === dashboardId ? 'bg-gray-700 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'
+      dashboardType === 'chat'
+        ? currentPage === 'chat'
+            ? 'bg-gray-700 text-white'
+            : 'text-gray-400 hover:bg-gray-800 hover:text-white'
+        : currentPage === 'dashboard' && currentDashboardId === dashboardId 
+          ? 'bg-gray-700 text-white' 
+          : 'text-gray-400 hover:bg-gray-800 hover:text-white'
     } ${isCollapsed ? 'justify-center' : ''}`;
 
-  const renderDashboardItem = (dashboard: Dashboard) => (
-    <li key={dashboard.id} onClick={() => onNavigate('dashboard', dashboard.id)} title={isCollapsed ? dashboard.title : undefined}>
-      <a className={navItemClasses(dashboard.id)}>
-        <DashboardIcon className="w-5 h-5 shrink-0" />
-        {!isCollapsed && <span className="text-sm font-medium ml-3">{dashboard.title}</span>}
-      </a>
-    </li>
-  );
+  const renderDashboardItem = (dashboard: Dashboard) => {
+    const handleClick = () => {
+      if (dashboard.type === 'chat') {
+        onNavigate('chat');
+      } else {
+        onNavigate('dashboard', dashboard.id);
+      }
+    };
+
+    const IconComponent = dashboard.type === 'chat' ? DocumentTextIcon : DashboardIcon;
+
+    return (
+      <li key={dashboard.id} onClick={handleClick} title={isCollapsed ? dashboard.title : undefined}>
+        <a className={navItemClasses(dashboard.id, dashboard.type)}>
+          <IconComponent className="w-5 h-5 shrink-0" />
+          {!isCollapsed && <span className="text-sm font-medium ml-3">{dashboard.title}</span>}
+        </a>
+      </li>
+    );
+  };
 
   return (
     <aside className={`bg-gray-900 border-r border-gray-700 flex flex-col transition-all duration-300 ease-in-out ${isCollapsed ? 'w-20' : 'w-64'}`}>
