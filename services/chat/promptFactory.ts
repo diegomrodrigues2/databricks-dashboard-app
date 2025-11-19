@@ -47,6 +47,11 @@ Supported Widget Types and their specific properties:
 7. Markdown (type: "markdown")
    - content: string (markdown text)
 
+8. Waterfall Chart (type: "waterfall")
+   - categoryColumn: string
+   - valueColumn: string
+   - totalCategories: string[] (Array of category names that represent totals)
+
 Example Output:
 ${WIDGET_START_TOKEN}
 {

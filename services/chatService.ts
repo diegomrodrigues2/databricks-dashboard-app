@@ -92,35 +92,123 @@ export async function streamChatResponse(
 
 // --- Mock Implementation ---
 
-const MOCK_DELAY_MS = 30; // Delay between chunks to simulate typing
+const MOCK_DELAY_MS = 15; // Faster typing for better DX
+
+interface MockResponse {
+    prefix: string;
+    config: any; // WidgetConfig
+    suffix: string;
+}
+
+const MOCK_SCENARIOS: MockResponse[] = [
+    {
+        prefix: "Based on the revenue data, here is the quarterly breakdown. You can see how specific quarters contributed to the total growth.\n\n",
+        config: {
+            type: 'waterfall',
+            dataSource: 'mango_revenue',
+            title: 'Mango Revenue Analysis',
+            description: 'Quarterly revenue changes showing net growth.',
+            categoryColumn: 'period',
+            valueColumn: 'change',
+            totalCategories: ['Q1 2023', 'Q1 2025'],
+            positiveColor: '#3B82F6',
+            negativeColor: '#EF4444',
+            totalColor: '#6B7280',
+            gridWidth: 12
+        },
+        suffix: "\n\nNotice the dip in Q3 2023. This correlates with the seasonal supply shortage we discussed earlier."
+    },
+    {
+        prefix: "I've plotted the sweetness against juiciness for all our fruits. This should help identify which fruits fit the 'sweet and juicy' profile.\n\n",
+        config: {
+            type: 'scatter',
+            dataSource: 'fruit_taste_data',
+            title: 'Taste Profile: Sweetness vs Juiciness',
+            description: 'Correlation between sweetness and juiciness scores (0-10).',
+            xColumn: 'sweetness',
+            yColumn: 'juiciness',
+            labelColumn: 'fruit',
+            pointRadius: 6,
+            xAxisLabel: 'Sweetness',
+            yAxisLabel: 'Juiciness',
+            gridWidth: 12
+        },
+        suffix: "\n\nMangoes and Strawberries are clearly in the top-right quadrant, indicating they are both very sweet and juicy."
+    },
+    {
+        prefix: "Here is the sales distribution across different regions. Asia is currently our largest market.\n\n",
+        config: {
+            type: 'donut',
+            dataSource: 'fruit_sales_by_region',
+            title: 'Global Sales Distribution',
+            description: 'Breakdown of sales revenue by region.',
+            categoryColumn: 'region',
+            valueColumn: 'sales',
+            showLabels: 'percent',
+            showLegend: true,
+            centerText: 'Total',
+            gridWidth: 8
+        },
+        suffix: "\n\nWould you like to see a breakdown of the 'Asia' region specifically?"
+    },
+    {
+        prefix: "Here is the detailed data table you requested, showing average sales, price, and taste metrics for each fruit.\n\n",
+        config: {
+            type: 'table',
+            dataSource: 'fruit_taste_data',
+            title: 'Detailed Fruit Metrics',
+            description: 'Comprehensive view of sales and taste attributes.',
+            rowCategoryColumn: 'fruit',
+            gridWidth: 12,
+            columns: [
+                { key: 'avg_sales', header: 'Avg Sales', format: 'number' },
+                { key: 'avg_price', header: 'Avg Price', format: 'currency', currencySymbol: '$' },
+                { key: 'sweetness', header: 'Sweetness' },
+                { key: 'juiciness', header: 'Juiciness' }
+            ],
+            conditionalFormatting: [
+                 { column: 'avg_sales', type: 'data-bar', color: '#3B82F6' }
+            ]
+        },
+        suffix: "\n\nYou can export this table to CSV if you need to perform further analysis in Excel."
+    }
+];
+
+let lastScenarioIndex = -1;
 
 async function streamMockResponse(onChunk: (chunk: string) => void) {
-  const mockWidgetConfig = {
-    type: 'bar',
-    dataSource: 'total_fruit_sales',
-    title: 'Fruit Sales Analysis',
-    description: 'Sales breakdown by fruit type',
-    categoryColumn: 'fruit',
-    valueColumn: 'units_sold',
-    aggregation: 'sum',
-    color: '#4f46e5',
-    gridWidth: 12
-  };
+  // Cyclic selection to ensure we see all types
+  let nextIndex = (lastScenarioIndex + 1) % MOCK_SCENARIOS.length;
+  lastScenarioIndex = nextIndex;
+  
+  const scenario = MOCK_SCENARIOS[nextIndex];
 
-  // The text is split into chunks to simulate streaming
-  const tokens = [
-    "Based ", "on ", "your ", "request, ", "I ", "have ", "analyzed ", "the ", "fruit ", "sales ", "data.\n\n",
-    "Here ", "is ", "the ", "visualization ", "you ", "asked ", "for:\n\n",
-    WIDGET_START_TOKEN,
-    JSON.stringify(mockWidgetConfig, null, 2),
-    WIDGET_END_TOKEN,
-    "\n\n", "As ", "you ", "can ", "see, ", "Apples ", "and ", "Bananas ", "are ", "the ", "top ", "performers ", 
-    "this ", "quarter. ", "Would ", "you ", "like ", "to ", "drill ", "down ", "into ", "regional ", "performance?"
-  ];
+  // 1. Stream Prefix
+  const prefixTokens = splitIntoTokens(scenario.prefix);
+  for (const token of prefixTokens) {
+    await new Promise(resolve => setTimeout(resolve, MOCK_DELAY_MS));
+    onChunk(token);
+  }
 
-  for (const token of tokens) {
+  // 2. Stream Widget
+  await new Promise(resolve => setTimeout(resolve, MOCK_DELAY_MS));
+  onChunk(WIDGET_START_TOKEN);
+  
+  // Stream JSON slightly faster or in larger chunks
+  const jsonString = JSON.stringify(scenario.config, null, 2);
+  onChunk(jsonString); // Sending whole JSON at once for simplicity in mock, or split it if needed
+  
+  onChunk(WIDGET_END_TOKEN);
+
+  // 3. Stream Suffix
+  const suffixTokens = splitIntoTokens(scenario.suffix);
+  for (const token of suffixTokens) {
     await new Promise(resolve => setTimeout(resolve, MOCK_DELAY_MS));
     onChunk(token);
   }
 }
 
+function splitIntoTokens(text: string): string[] {
+    // crude tokenization for effect
+    return text.split(/(\s+)/);
+}

@@ -5,6 +5,11 @@ import { useSpreadsheet } from '../../hooks/useSpreadsheet';
 import BarChartComponent from '../charts/BarChartComponent';
 import LineChartComponent from '../charts/LineChartComponent';
 import KPIComponent from '../charts/KPIComponent';
+import ScatterPlotComponent from '../charts/ScatterPlotComponent';
+import WaterfallChartComponent from '../charts/WaterfallChartComponent';
+import TableChartComponent from '../charts/TableChartComponent';
+import PieChartComponent from '../charts/PieChartComponent';
+import DonutChartComponent from '../charts/DonutChartComponent';
 
 interface DynamicWidgetRendererProps {
     config: WidgetConfig;
@@ -82,6 +87,16 @@ export const DynamicWidgetRenderer: React.FC<DynamicWidgetRendererProps> = ({ co
                 return <BarChartComponent config={config} {...commonProps} />;
             case 'line':
                 return <LineChartComponent config={config} activeFilters={activeFilters} {...commonProps} />;
+            case 'scatter':
+                return <ScatterPlotComponent config={config} activeFilters={activeFilters} {...commonProps} />;
+            case 'waterfall':
+                return <WaterfallChartComponent config={config} {...commonProps} />;
+            case 'table':
+                return <TableChartComponent config={config} {...commonProps} />;
+            case 'pie':
+                return <PieChartComponent config={config} {...commonProps} />;
+            case 'donut':
+                return <DonutChartComponent config={config} {...commonProps} />;
             case 'kpi':
                 return <KPIComponent config={config} data={data} onSeeData={commonProps.onSeeData} />; 
             default:
