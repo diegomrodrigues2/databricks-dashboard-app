@@ -29,9 +29,9 @@ import FormComponent from '../components/charts/FormComponent';
 import DashboardFilters from '../components/DashboardFilters';
 import { getDashboardConfig, getDataForSource } from '../services/dashboardService';
 import type { AppConfig, WidgetConfig, DashboardFilterConfig } from '../types';
-import Spreadsheet from '../components/spreadsheet/Spreadsheet';
 import DataSourceSelector from '../components/DataSourceSelector';
 import { ExclamationTriangleIcon } from '../components/icons/ExclamationTriangleIcon';
+import { useSpreadsheet } from '../hooks/useSpreadsheet';
 
 const applyWidgetFilters = (data: any[], filters: WidgetConfig['filters']) => {
     if (!filters || filters.length === 0) {
@@ -125,7 +125,7 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ dashboardId }) => {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [activeFilters, setActiveFilters] = useState<{ [key: string]: any }>({});
-    const [spreadsheetView, setSpreadsheetView] = useState<{ title: string; data: any[], isEditable: boolean } | null>(null);
+    const { openSpreadsheet } = useSpreadsheet();
 
     useEffect(() => {
         const fetchData = async () => {
@@ -134,7 +134,6 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ dashboardId }) => {
             setConfig(null);
             setData({});
             setActiveFilters({});
-            setSpreadsheetView(null);
             try {
                 const dashboardConfig = await getDashboardConfig(dashboardId);
                 setConfig(dashboardConfig);
@@ -224,14 +223,14 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ dashboardId }) => {
     const handleSeeData = (title: string, data: any[], dataSourceName: string) => {
         const dataSourceConfig = config?.datasources.find(ds => ds.name === dataSourceName);
         const isEditable = dataSourceConfig?.enableInlineEditing ?? false;
-        setSpreadsheetView({ title, data, isEditable });
+        openSpreadsheet(title, data, isEditable);
     };
 
     const handleDataSourceSelect = (sourceName: string) => {
         const sourceData = data[sourceName];
         const dataSourceInfo = config?.datasources.find(ds => ds.name === sourceName);
         if (sourceData) {
-            setSpreadsheetView({ title: `Data Source: ${dataSourceInfo?.name || sourceName}`, data: sourceData, isEditable: dataSourceInfo?.enableInlineEditing ?? false });
+            openSpreadsheet(`Data Source: ${dataSourceInfo?.name || sourceName}`, sourceData, dataSourceInfo?.enableInlineEditing ?? false);
         }
     };
 
@@ -258,17 +257,6 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ dashboardId }) => {
             <div className="h-full flex flex-col justify-center items-center">
                 <p className="text-red-400">Failed to load dashboard configuration.</p>
             </div>
-        );
-    }
-    
-    if (spreadsheetView) {
-        return (
-            <Spreadsheet
-                title={spreadsheetView.title}
-                data={spreadsheetView.data}
-                onClose={() => setSpreadsheetView(null)}
-                isEditable={spreadsheetView.isEditable}
-            />
         );
     }
 

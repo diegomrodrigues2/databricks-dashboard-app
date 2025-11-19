@@ -11,15 +11,21 @@ interface BarChartComponentProps {
   data: any[];
   onCategoryClick?: (column: string, value: string) => void;
   onSeeData: () => void;
+  width?: number;
+  height?: number;
 }
 
 const COLORS = ['#FF6B6B', '#FFE66D', '#4ECDC4', '#55C6A9', '#F7B801', '#A37774', '#F45B69'];
 
-const BarChartComponent: React.FC<BarChartComponentProps> = ({ config, data, onCategoryClick, onSeeData }) => {
+const BarChartComponent: React.FC<BarChartComponentProps> = ({ config, data, onCategoryClick, onSeeData, width: propWidth, height: propHeight }) => {
     const chartContainerRef = useRef<HTMLDivElement>(null);
     const [hoveredBar, setHoveredBar] = useState<{ category: string; colorCategory?: string } | null>(null);
     const [tooltip, setTooltip] = useState<{ x: number; y: number; category: string; value: number; colorCategory?: string } | null>(null);
     const { colorCategoryColumn } = config;
+
+    // Use props if provided, otherwise default
+    const width = propWidth || 600;
+    const height = propHeight || 350;
 
     const { aggregatedData, colorCategories } = useMemo(() => {
         if (!data || data.length === 0) return { aggregatedData: [], colorCategories: [] };
@@ -120,8 +126,7 @@ const BarChartComponent: React.FC<BarChartComponentProps> = ({ config, data, onC
         bottom: 100, // Increased for rotated labels
         left: config.yAxisLabel ? 70 : 50 
     };
-    const width = 600; 
-    const height = 350;
+    // Width and height are now defined at the top of the component using props or defaults
     const innerWidth = width - margin.left - margin.right;
     const innerHeight = height - margin.top - margin.bottom;
 

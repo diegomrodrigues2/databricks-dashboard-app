@@ -3,6 +3,8 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
 import { AuthProvider } from './hooks/useAuth';
+import { ChatProvider } from './hooks/useChat';
+import { SpreadsheetProvider } from './hooks/useSpreadsheet';
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {
@@ -13,7 +15,11 @@ const root = ReactDOM.createRoot(rootElement);
 root.render(
   <React.StrictMode>
     <AuthProvider>
-      <App />
+      <ChatProvider>
+        <SpreadsheetProvider>
+          <App />
+        </SpreadsheetProvider>
+      </ChatProvider>
     </AuthProvider>
   </React.StrictMode>
 );

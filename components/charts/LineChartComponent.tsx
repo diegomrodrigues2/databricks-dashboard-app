@@ -15,6 +15,8 @@ interface LineChartComponentProps {
   activeFilters: { [key: string]: any };
   isPanelItem?: boolean;
   onSeeData?: () => void;
+  width?: number;
+  height?: number;
 }
 
 interface ProcessedLineData {
@@ -29,7 +31,7 @@ interface TooltipData {
     series: { name: string; value: number; color: string }[];
 }
 
-const LineChartComponent: React.FC<LineChartComponentProps> = ({ config, data, onCategoryClick, activeFilters, isPanelItem = false, onSeeData }) => {
+const LineChartComponent: React.FC<LineChartComponentProps> = ({ config, data, onCategoryClick, activeFilters, isPanelItem = false, onSeeData, width: propWidth, height: propHeight }) => {
     const chartContainerRef = useRef<HTMLDivElement>(null);
     const [tooltip, setTooltip] = useState<TooltipData | null>(null);
     const [hoveredSeriesKey, setHoveredSeriesKey] = useState<string | null>(null);
@@ -273,8 +275,8 @@ const LineChartComponent: React.FC<LineChartComponentProps> = ({ config, data, o
     const margin = isPanelItem
         ? { top: 10, right: 20, bottom: 30, left: 40 }
         : { top: 20, right: 100, bottom: 40, left: 60 };
-    const width = isPanelItem ? 400 : 800;
-    const height = isPanelItem ? 250 : 400;
+    const width = propWidth || (isPanelItem ? 400 : 800);
+    const height = propHeight || (isPanelItem ? 250 : 400);
     const innerWidth = width - margin.left - margin.right;
     const innerHeight = height - margin.top - margin.bottom;
 
