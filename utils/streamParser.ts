@@ -1,8 +1,6 @@
 import { TextPart, WidgetPart, WidgetConfig } from '../types';
 import { WIDGET_START_TOKEN, WIDGET_END_TOKEN } from './chatProtocol';
 
-type ParseState = 'TEXT' | 'THOUGHT' | 'COMMAND' | 'WIDGET';
-
 export interface ParsedStreamResult {
     parts: (TextPart | WidgetPart)[];
     thought?: string;
@@ -14,7 +12,7 @@ export interface ParsedStreamResult {
 
 /**
  * Parses the streaming chat content to separate natural language, thoughts, commands, and widgets.
- * Uses a simple state machine approach to handle XML-like tags.
+ * Uses a lexical tokenizer approach to handle XML-like tags and Markdown blocks.
  * 
  * @param content The full message content string
  * @returns Parsed structure containing display parts and internal state
@@ -23,128 +21,153 @@ export function parseStreamedContent(content: string): ParsedStreamResult {
     const parts: (TextPart | WidgetPart)[] = [];
     let thought = '';
     let command: { tool: string; params: string } | undefined;
-    
-    // Regex definitions
-    const THOUGHT_START = /<thought>/;
-    const THOUGHT_END = /<\/thought>/;
-    const COMMAND_START = /<command\s+tool="([^"]+)">/;
-    const COMMAND_END = /<\/command>/;
-    
-    let remaining = content;
 
-    while (remaining.length > 0) {
-        // Find earliest occurrence of any tag
-        const thoughtMatch = remaining.match(THOUGHT_START);
-        const commandMatch = remaining.match(COMMAND_START);
-        const widgetStartIdx = remaining.indexOf(WIDGET_START_TOKEN);
+    let cursor = 0;
+    const length = content.length;
 
-        let nextTagIdx = -1;
-        let nextTagType: ParseState = 'TEXT';
+    while (cursor < length) {
+        const remaining = content.slice(cursor);
         
-        // Determine which tag comes first
-        if (thoughtMatch && thoughtMatch.index !== undefined) {
-            nextTagIdx = thoughtMatch.index;
-            nextTagType = 'THOUGHT';
-        }
-        
-        if (commandMatch && commandMatch.index !== undefined) {
-            if (nextTagIdx === -1 || commandMatch.index < nextTagIdx) {
-                nextTagIdx = commandMatch.index;
-                nextTagType = 'COMMAND';
-            }
-        }
-        
-        if (widgetStartIdx !== -1) {
-            if (nextTagIdx === -1 || widgetStartIdx < nextTagIdx) {
-                nextTagIdx = widgetStartIdx;
-                nextTagType = 'WIDGET';
-            }
-        }
-        
-        // If no tags found, everything remaining is text
-        if (nextTagIdx === -1) {
-            if (remaining.trim()) {
-                parts.push({ type: 'text', content: remaining });
+        // Find next potential tag start
+        const thoughtStart = remaining.indexOf('<thought>');
+        const commandMatch = remaining.match(/<command\s+tool="([^"]+)">/);
+        const commandStart = commandMatch ? commandMatch.index! : -1;
+        const widgetStartTokenIdx = remaining.indexOf(WIDGET_START_TOKEN);
+        const widgetTagStart = remaining.indexOf('<widget>');
+        const sqlBlockStartMatch = remaining.match(/```sql\s/); 
+        const sqlBlockStart = sqlBlockStartMatch ? sqlBlockStartMatch.index! : -1;
+
+        // We need to find the *closest* one that is valid
+        const indices = [
+            { type: 'thought', index: thoughtStart },
+            { type: 'command', index: commandStart },
+            { type: 'widget_token', index: widgetStartTokenIdx },
+            { type: 'widget_tag', index: widgetTagStart },
+            { type: 'sql', index: sqlBlockStart }
+        ].filter(x => x.index !== -1).sort((a, b) => a.index - b.index);
+
+        if (indices.length === 0) {
+            // No more tags, everything else is text
+            if (remaining.length > 0) {
+                 parts.push({ type: 'text', content: remaining });
             }
             break;
         }
 
-        // Push preceding text if any
-        if (nextTagIdx > 0) {
-            const textContent = remaining.substring(0, nextTagIdx);
-            if (textContent) {
-                parts.push({ type: 'text', content: textContent });
-            }
-        }
+        const nextTag = indices[0];
         
-        // Handle the found tag
-        if (nextTagType === 'THOUGHT') {
-            const endMatch = remaining.substring(nextTagIdx).match(THOUGHT_END);
-            if (endMatch && endMatch.index !== undefined) {
-                const fullThoughtBlock = remaining.substring(nextTagIdx, nextTagIdx + endMatch.index + endMatch[0].length);
-                const thoughtContent = fullThoughtBlock.replace(THOUGHT_START, '').replace(THOUGHT_END, '');
-                thought = thoughtContent.trim();
-                remaining = remaining.substring(nextTagIdx + fullThoughtBlock.length);
-            } else {
-                // Incomplete thought block - treat as text or hidden state?
-                // For now, let's assume we want to see partial thoughts if we were streaming them differently,
-                // but here we just extract what we can or wait.
-                // To be robust for streaming, if we don't find the end tag, we might be in the middle of it.
-                // Current simple logic: break loop if incomplete tag to wait for more data (except we are parsing full content every time)
-                // If it's the end of the stream, we might just take the rest as thought.
-                 const thoughtContent = remaining.substring(nextTagIdx).replace(THOUGHT_START, '');
-                 thought = thoughtContent.trim();
-                 remaining = ''; // Consumed rest
-            }
-        } else if (nextTagType === 'COMMAND') {
-            // Re-match to get capture groups
-            const specificCommandMatch = remaining.substring(nextTagIdx).match(COMMAND_START);
-            if (!specificCommandMatch) break; // Should not happen
-            
-            const toolName = specificCommandMatch[1];
-            const endMatch = remaining.substring(nextTagIdx).match(COMMAND_END);
-            
-            if (endMatch && endMatch.index !== undefined) {
-                 const fullCommandBlock = remaining.substring(nextTagIdx, nextTagIdx + endMatch.index + endMatch[0].length);
-                 const paramsContent = fullCommandBlock
-                    .substring(specificCommandMatch[0].length, fullCommandBlock.length - endMatch[0].length)
-                    .trim();
-                 
-                 command = { tool: toolName, params: paramsContent };
-                 remaining = remaining.substring(nextTagIdx + fullCommandBlock.length);
-            } else {
-                // Incomplete command
-                remaining = '';
-            }
-        } else if (nextTagType === 'WIDGET') {
-            const afterStart = remaining.substring(nextTagIdx + WIDGET_START_TOKEN.length);
-            const endIdx = afterStart.indexOf(WIDGET_END_TOKEN);
-            
-            if (endIdx !== -1) {
-                let jsonString = afterStart.substring(0, endIdx).trim();
-                
-                // Clean up markdown code fences
-        if (jsonString.startsWith('```')) {
-             jsonString = jsonString.replace(/^```[a-z]*\s*/i, '').replace(/```$/, '');
+        // Push text before tag
+        if (nextTag.index > 0) {
+            parts.push({ type: 'text', content: remaining.slice(0, nextTag.index) });
         }
 
-        try {
-            const config = JSON.parse(jsonString) as WidgetConfig;
-            parts.push({ type: 'widget', config });
-        } catch (error) {
-            console.warn("Failed to parse widget JSON:", error);
-            parts.push({ 
-                type: 'text', 
-                        content: `${WIDGET_START_TOKEN}${afterStart.substring(0, endIdx)}${WIDGET_END_TOKEN}` 
-            });
-        }
-                remaining = afterStart.substring(endIdx + WIDGET_END_TOKEN.length);
+        // Advance cursor to tag start
+        cursor += nextTag.index;
+        const currentRemaining = content.slice(cursor);
+
+        if (nextTag.type === 'thought') {
+             const endTag = '</thought>';
+             const endIdx = currentRemaining.indexOf(endTag);
+             if (endIdx !== -1) {
+                 thought = currentRemaining.slice('<thought>'.length, endIdx).trim();
+                 cursor += endIdx + endTag.length;
+             } else {
+                 // Incomplete thought, consume rest but track it
+                 thought = currentRemaining.slice('<thought>'.length).trim();
+                 cursor = length; 
+             }
+        } else if (nextTag.type === 'command') {
+            const match = currentRemaining.match(/^<command\s+tool="([^"]+)">/);
+            if (match) {
+                const tagLen = match[0].length;
+                const endTag = '</command>';
+                const endIdx = currentRemaining.indexOf(endTag);
+                
+                if (endIdx !== -1) {
+                    const params = currentRemaining.slice(tagLen, endIdx).trim();
+                    command = { tool: match[1], params };
+                    cursor += endIdx + endTag.length;
+                } else {
+                    // Incomplete command - wait for more data
+                    // We don't output it as text to avoid showing raw tags
+                     cursor = length;
+                }
             } else {
-                // Incomplete widget
-                 remaining = '';
+                cursor++; // Should not happen
             }
+        } else if (nextTag.type === 'widget_token') {
+             const startLen = WIDGET_START_TOKEN.length;
+             const endIdx = currentRemaining.indexOf(WIDGET_END_TOKEN);
+             if (endIdx !== -1) {
+                 const json = currentRemaining.slice(startLen, endIdx).trim();
+                 try {
+                     // Handle markdown fences in JSON if present
+                     let cleanJson = json;
+                     if (cleanJson.startsWith('```')) {
+                        cleanJson = cleanJson.replace(/^```[a-z]*\s*/i, '').replace(/```$/, '');
+                     }
+                     const config = JSON.parse(cleanJson) as WidgetConfig;
+                     parts.push({ type: 'widget', config });
+                 } catch (e) {
+                     // Fallback to text if invalid JSON
+                     parts.push({ type: 'text', content: currentRemaining.slice(0, endIdx + WIDGET_END_TOKEN.length) });
+                 }
+                 cursor += endIdx + WIDGET_END_TOKEN.length;
+             } else {
+                 // Incomplete widget
+                 cursor = length;
+             }
+        } else if (nextTag.type === 'widget_tag') {
+             const startLen = '<widget>'.length;
+             const endIdx = currentRemaining.indexOf('</widget>');
+             if (endIdx !== -1) {
+                 const json = currentRemaining.slice(startLen, endIdx).trim();
+                 try {
+                     const config = JSON.parse(json) as WidgetConfig;
+                     parts.push({ type: 'widget', config });
+                 } catch (e) {
+                      parts.push({ type: 'text', content: currentRemaining.slice(0, endIdx + '</widget>'.length) });
+                 }
+                 cursor += endIdx + '</widget>'.length;
+             } else {
+                 cursor = length;
+             }
+        } else if (nextTag.type === 'sql') {
+             // ```sql code blocks -> promote to CodeExecutorWidget
+             const match = currentRemaining.match(/^```sql\s*/);
+             if (match) {
+                 const startLen = match[0].length;
+                 const endIdx = currentRemaining.indexOf('```', startLen);
+                 
+                 if (endIdx !== -1) {
+                     const code = currentRemaining.slice(startLen, endIdx).trim();
+                     
+                     // Create a CodeExecutorWidget config
+                     const config: WidgetConfig = {
+                         type: 'code-executor',
+                         id: `code-${Date.now()}-${parts.length}`, 
+                         dataSource: 'databricks',
+                         title: 'Generated SQL',
+                         description: 'Review and execute this query',
+                         language: 'sql',
+                         code: code,
+                         isEditable: true,
+                         autoExecute: false,
+                         gridWidth: 12
+                     };
+                     
+                     parts.push({ type: 'widget', config });
+                     cursor += endIdx + 3; // length of ```
+                 } else {
+                     // Incomplete block - treat as text so markdown renderer handles it for now
+                     parts.push({ type: 'text', content: currentRemaining });
+                     cursor = length;
+                 }
+             } else {
+                 cursor++;
+             }
         }
     }
-
+    
     return { parts, thought, command };
 }

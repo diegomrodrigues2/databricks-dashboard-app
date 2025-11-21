@@ -583,8 +583,21 @@ export interface FormWidgetConfig extends BaseWidgetConfig {
     submitButtonText?: string;
 }
 
+export interface CodeExecutorWidgetConfig extends BaseWidgetConfig {
+  type: 'code-executor';
+  language: 'sql' | 'python' | 'scala';
+  code: string;
+  isEditable: boolean;
+  autoExecute: boolean; // Se false, requer clique do usuário em "Run"
+  executionId?: string; // Para rastrear execuções longas
+  context?: {
+    catalog?: string;
+    schema?: string;
+    warehouseId?: string; // Específico para Databricks SQL Warehouses
+  };
+}
 
-export type WidgetConfig = KPIWidgetConfig | BarChartWidgetConfig | GroupedBarChartWidgetConfig | LollipopChartWidgetConfig | BulletChartWidgetConfig | DotPlotWidgetConfig | DumbbellChartWidgetConfig | RangePlotWidgetConfig | RadialBarChartWidgetConfig | WaterfallChartWidgetConfig | MatrixChartWidgetConfig | TableChartWidgetConfig | PieChartWidgetConfig | DonutChartWidgetConfig | SemicircleDonutChartWidgetConfig | ChartPanelWidgetConfig | GaugeChartWidgetConfig | PyramidChartWidgetConfig | LineChartWidgetConfig | ScatterPlotWidgetConfig | HistogramWidgetConfig | MarkdownWidgetConfig | BoxPlotWidgetConfig | CandlestickChartWidgetConfig | FormWidgetConfig | DataTableWidgetConfig;
+export type WidgetConfig = KPIWidgetConfig | BarChartWidgetConfig | GroupedBarChartWidgetConfig | LollipopChartWidgetConfig | BulletChartWidgetConfig | DotPlotWidgetConfig | DumbbellChartWidgetConfig | RangePlotWidgetConfig | RadialBarChartWidgetConfig | WaterfallChartWidgetConfig | MatrixChartWidgetConfig | TableChartWidgetConfig | PieChartWidgetConfig | DonutChartWidgetConfig | SemicircleDonutChartWidgetConfig | ChartPanelWidgetConfig | GaugeChartWidgetConfig | PyramidChartWidgetConfig | LineChartWidgetConfig | ScatterPlotWidgetConfig | HistogramWidgetConfig | MarkdownWidgetConfig | BoxPlotWidgetConfig | CandlestickChartWidgetConfig | FormWidgetConfig | DataTableWidgetConfig | CodeExecutorWidgetConfig;
 
 export type FilterType = 'text' | 'select' | 'multiselect' | 'daterange';
 
@@ -643,6 +656,13 @@ export interface Message {
   toolCalls?: ToolCall[];
   toolResults?: ToolResult[];
   widgetConfigSnapshot?: WidgetConfig;
+  structuredInquiry?: StructuredInquiry;
+  decision?: {
+    inquiryId: string;
+    value: any;
+    timestamp: Date;
+    userId: string; // Para auditoria em ambientes multi-usuário
+  };
 }
 
 export interface Session {
@@ -651,4 +671,24 @@ export interface Session {
   messages: Message[];
   createdAt: number;
   updatedAt: number;
+}
+
+export type InquiryType = 'confirmation' | 'selection' | 'correction' | 'text_input';
+
+export interface InquiryOption {
+    label: string;
+    value: any;
+    style?: 'danger' | 'primary' | 'neutral';
+    icon?: string; // Referência aos ícones existentes em components/icons
+}
+
+export interface StructuredInquiry {
+  id: string;
+  type: InquiryType;
+  question: string;
+  description?: string;
+  options?: InquiryOption[];
+  defaultValue?: any;
+  timeout?: number; // Tempo em ms para auto-cancelamento (opcional)
+  meta?: Record<string, any>; // Para passar contexto como a query SQL a ser confirmada
 }

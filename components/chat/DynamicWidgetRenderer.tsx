@@ -10,22 +10,27 @@ import WaterfallChartComponent from '../charts/WaterfallChartComponent';
 import TableChartComponent from '../charts/TableChartComponent';
 import PieChartComponent from '../charts/PieChartComponent';
 import DonutChartComponent from '../charts/DonutChartComponent';
+import MarkdownComponent from '../charts/MarkdownComponent';
+import GaugeChartComponent from '../charts/GaugeChartComponent';
+import CodeExecutionWidget from '../widgets/CodeExecutionWidget';
 
 interface DynamicWidgetRendererProps {
     config: WidgetConfig;
     activeFilters?: { [key: string]: any };
+    onCodeExecuted?: (code: string, result: any[]) => void;
 }
 
-export const DynamicWidgetRenderer: React.FC<DynamicWidgetRendererProps> = ({ config, activeFilters = {} }) => {
+export const DynamicWidgetRenderer: React.FC<DynamicWidgetRendererProps> = ({ config, activeFilters = {}, onCodeExecuted }) => {
     const [data, setData] = useState<any[]>([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const { openSpreadsheet } = useSpreadsheet();
 
     useEffect(() => {
+        // For code-executor, data fetching is handled internally or on execute
+        if (!config.dataSource || config.type === 'code-executor') return;
+        
         const fetchData = async () => {
-            if (!config.dataSource) return;
-            
             setLoading(true);
             setError(null);
             try {
@@ -40,7 +45,7 @@ export const DynamicWidgetRenderer: React.FC<DynamicWidgetRendererProps> = ({ co
         };
 
         fetchData();
-    }, [config.dataSource]);
+    }, [config.dataSource, config.type]);
 
     const handleSeeData = async () => {
         try {
@@ -117,7 +122,13 @@ export const DynamicWidgetRenderer: React.FC<DynamicWidgetRendererProps> = ({ co
             case 'donut':
                 return <DonutChartComponent config={config} {...commonProps} />;
             case 'kpi':
-                return <KPIComponent config={config} data={data} onSeeData={commonProps.onSeeData} />; 
+                return <KPIComponent config={config} data={data} onSeeData={commonProps.onSeeData} />;
+            case 'gauge':
+                return <GaugeChartComponent config={config} {...commonProps} />;
+            case 'markdown':
+                return <MarkdownComponent config={config} onSeeData={commonProps.onSeeData} />;
+            case 'code-executor':
+                return <CodeExecutionWidget config={config} onExecute={onCodeExecuted} />;
             default:
                 return (
                      <div className="p-4 border border-gray-700 rounded-lg bg-gray-900 my-2">

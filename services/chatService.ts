@@ -95,7 +95,7 @@ export async function streamChatResponse(
 const MOCK_DELAY_MS = 15; // Faster typing for better DX
 
 interface MockScenario {
-    steps: string[]; // Step 0: Thought+Command, Step 1: Response+Widget
+    steps: (string | ((lastMsg: Message) => string))[]; // Step 0: Thought+Command, Step 1: Response+Widget
 }
 
 const MOCK_SCENARIOS: MockScenario[] = [
@@ -207,6 +207,202 @@ ${WIDGET_END_TOKEN}
 
 You can export this table to CSV if you need to perform further analysis in Excel.`
         ]
+    },
+    {
+        steps: [
+            // Step 1: Ask User
+            `<thought>
+The user wants to delete the 'fruit_sales' table. This is a destructive operation.
+I must ask for explicit confirmation before proceeding.
+</thought>
+<command tool="ask_user">
+{
+  "id": "confirm-drop-table",
+  "type": "confirmation",
+  "question": "Are you sure you want to drop the table 'fruit_sales'?",
+  "description": "This action cannot be undone. All data will be lost.",
+  "options": [
+    { "label": "Yes, delete it", "value": "yes", "style": "danger" },
+    { "label": "Cancel", "value": "no", "style": "neutral" }
+  ]
+}
+</command>`,
+            
+            // Step 2: Handle Confirmation
+            `<thought>
+User confirmed the deletion. Proceeding with the drop operation.
+</thought>
+I have successfully deleted the 'fruit_sales' table as requested.
+
+<widget>
+{
+    "type": "markdown",
+    "content": "### Operation Complete\\nTable **fruit_sales** has been dropped."
+}
+</widget>`
+        ]
+    },
+    // New Scenario: Selection (Dynamic)
+    {
+        steps: [
+             // Step 1
+            `<thought>
+The user wants to see the top performing fruits. I can display this data by Total Sales (Revenue) or by Quantity Sold.
+I should ask the user which metric they prefer to ensure I show the most relevant data.
+</thought>
+<command tool="ask_user">
+{
+  "id": "select-metric",
+  "type": "selection",
+  "question": "How would you like to rank the top performers?",
+  "options": [
+    { "label": "By Revenue ($)", "value": "revenue", "icon": "CurrencyDollarIcon" },
+    { "label": "By Quantity (Units)", "value": "quantity", "icon": "HashtagIcon" }
+  ]
+}
+</command>`,
+
+            // Step 2 (Dynamic)
+            (lastMsg: Message) => {
+                let decisionValue = 'revenue'; // default
+                try {
+                    const decision = JSON.parse(lastMsg.content);
+                    if (decision && decision.value) {
+                        decisionValue = decision.value;
+                    }
+                } catch (e) { console.error(e); }
+
+                const isRevenue = decisionValue === 'revenue';
+                const title = isRevenue ? "Top Fruits by Revenue" : "Top Fruits by Quantity";
+                const valueColumn = isRevenue ? "total_sales" : "total_quantity";
+                const format = isRevenue ? "currency" : "number";
+                const currencySymbol = isRevenue ? "$" : undefined;
+                const color = isRevenue ? "#10B981" : "#8B5CF6"; // Green for money, Purple for units
+
+                return `<thought>
+User selected to rank by ${decisionValue}. Querying data sorted by ${valueColumn}.
+</thought>
+Here are the top performing fruits based on **${decisionValue}**.
+
+${WIDGET_START_TOKEN}
+{
+    "type": "bar",
+    "dataSource": "fruit_sales",
+    "title": "${title}",
+    "description": "Ranking based on user selection.",
+    "categoryColumn": "fruit",
+    "valueColumn": "${valueColumn}",
+    "aggregation": "sum",
+    "color": "${color}",
+    "yAxisFormat": "${format}",
+    "currencySymbol": "${currencySymbol || ''}",
+    "gridWidth": 12
+}
+${WIDGET_END_TOKEN}`;
+            }
+        ]
+    },
+    // New Scenario: Parameter Input (Dynamic)
+    {
+        steps: [
+            // Step 1
+            `<thought>
+The user wants to set a sales target for the dashboard gauge.
+I need to know the specific target amount to configure the visualization correctly.
+</thought>
+<command tool="ask_user">
+{
+  "id": "set-target",
+  "type": "text_input",
+  "question": "What is your monthly sales target ($)?",
+  "description": "Enter a numeric value (e.g. 50000).",
+  "defaultValue": "50000"
+}
+</command>`,
+
+            // Step 2 (Dynamic)
+            (lastMsg: Message) => {
+                let targetValue = 50000;
+                try {
+                    const decision = JSON.parse(lastMsg.content);
+                    if (decision && decision.value) {
+                        targetValue = parseInt(decision.value, 10) || 50000;
+                    }
+                } catch (e) { console.error(e); }
+
+                // Cap at reasonable limits for the mock visualization
+                const maxVal = Math.max(targetValue * 1.2, 60000);
+
+                return `<thought>
+User set the target to $${targetValue.toLocaleString()}.
+Configuring gauge chart with min=0, max=${maxVal}, and target=${targetValue}.
+</thought>
+I've updated the Sales Goal gauge with your target of **$${targetValue.toLocaleString()}**.
+
+${WIDGET_START_TOKEN}
+{
+    "type": "gauge",
+    "dataSource": "fruit_sales",
+    "title": "Monthly Sales Goal",
+    "description": "Current progress against your custom target.",
+    "dataColumn": "sales",
+    "aggregation": "sum",
+    "minValue": 0,
+    "maxValue": ${maxVal},
+    "ranges": [
+        { "from": 0, "to": ${targetValue * 0.6}, "color": "#EF4444", "label": "Low" },
+        { "from": ${targetValue * 0.6}, "to": ${targetValue * 0.9}, "color": "#F59E0B", "label": "Warning" },
+        { "from": ${targetValue * 0.9}, "to": ${maxVal}, "color": "#10B981", "label": "On Track" }
+    ],
+    "valueSuffix": " USD",
+    "gridWidth": 12
+}
+${WIDGET_END_TOKEN}`;
+            }
+        ]
+    },
+    // New Scenario: Code Execution (Dynamic)
+    {
+        steps: [
+            // Step 1: Assistant proposes SQL
+            `<thought>
+The user wants to inspect the raw data for 'fruit_sales'.
+I will provide a SQL query to select the top records.
+I'll use the code-executor widget to allow the user to run and modify the query.
+</thought>
+Here is the SQL query to fetch the raw fruit sales data. You can execute it directly here.
+
+${WIDGET_START_TOKEN}
+{
+    "type": "code-executor",
+    "dataSource": "fruit_sales",
+    "title": "Raw Fruit Sales Data",
+    "description": "Execute SQL to view raw data.",
+    "language": "sql",
+    "code": "SELECT * FROM fruit_sales LIMIT 20",
+    "isEditable": true,
+    "autoExecute": false
+}
+${WIDGET_END_TOKEN}`,
+
+            // Step 2: Handle Execution Result
+            (lastMsg: Message) => {
+                let rowCount = "some";
+                try {
+                    const result = JSON.parse(lastMsg.content);
+                    if (result.result_preview && Array.isArray(result.result_preview)) {
+                         rowCount = result.result_preview.length.toString();
+                    }
+                } catch (e) { }
+
+                return `<thought>
+The code execution was successful and returned ${rowCount} rows.
+I should confirm this to the user.
+</thought>
+I see the query executed successfully and returned **${rowCount}** rows.
+You can now analyze this data in the table above or modify the query to refine your results.`;
+            }
+        ]
     }
 ];
 
@@ -236,7 +432,18 @@ async function streamMockResponse(messages: Message[], onChunk: (chunk: string) 
 
   const scenario = MOCK_SCENARIOS[scenarioIndex];
   // Ensure we don't go out of bounds if a scenario is missing a step (though all have 2)
-  const content = scenario.steps[stepIndex] || "Error: Missing mock step.";
+  let contentOrFn = scenario.steps[stepIndex];
+  
+  if (!contentOrFn) {
+      contentOrFn = "Error: Missing mock step.";
+  }
+
+  let content = "";
+  if (typeof contentOrFn === 'function') {
+      content = contentOrFn(lastMsg);
+  } else {
+      content = contentOrFn;
+  }
   
   const tokens = splitIntoTokens(content);
 
@@ -249,5 +456,7 @@ async function streamMockResponse(messages: Message[], onChunk: (chunk: string) 
 function splitIntoTokens(text: string): string[] {
     // improved tokenization to keep tags intact or split appropriately
     // splitting by spaces is crude but sufficient for mock visuals
+    // Now that we have a smarter parser in streamParser.ts, we can be a bit looser here
+    // but it helps to send tags as single tokens if possible to simulate fast generation
     return text.split(/(\s+|<[^>]+>)/).filter(Boolean);
 }

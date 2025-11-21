@@ -34,14 +34,15 @@ const GaugeChartComponent: React.FC<GaugeChartComponentProps> = ({ config, data,
 
     const formattedValue = useMemo(() => {
         const { maxValue, valueSuffix, decimalPlaces = 0 } = config;
-        const valueToDisplay = valueSuffix === '%'
-            ? (maxValue === 0 ? 0 : (currentValue / maxValue) * 100)
-            : currentValue;
+        // Note: Removed the percentage logic that forced % display when suffix was present. 
+        // We now rely on valueSuffix to just append the suffix string.
+        // If percentage calculation is desired, it should probably be explicit in the config, 
+        // but based on typical gauge usage, showing the raw value + suffix is safer.
         
         return new Intl.NumberFormat('en-US', {
             minimumFractionDigits: decimalPlaces,
             maximumFractionDigits: decimalPlaces,
-        }).format(valueToDisplay) + (valueSuffix || '');
+        }).format(currentValue) + (valueSuffix || '');
     }, [currentValue, config]);
     
     const handleExportCsv = () => {
@@ -100,7 +101,7 @@ const GaugeChartComponent: React.FC<GaugeChartComponentProps> = ({ config, data,
                 onMouseEnter={() => setIsHovered(true)}
                 onMouseLeave={() => setIsHovered(false)}
             >
-                {data.length > 0 ? (
+                {data.length >= 0 ? ( // Allow rendering even with empty data (0 value)
                     <svg width="100%" height="100%" viewBox={`0 0 ${width} ${height}`} aria-label={config.title} preserveAspectRatio="xMidYMid meet">
                         <g transform={`translate(${width / 2}, ${height - margin.bottom})`}>
                             {/* Ranges */}
@@ -122,12 +123,11 @@ const GaugeChartComponent: React.FC<GaugeChartComponentProps> = ({ config, data,
                                 const endPoint = { x: (radius + tickLength) * Math.sin(angle), y: -(radius + tickLength) * Math.cos(angle) };
                                 const textPoint = { x: (radius + textOffset) * Math.sin(angle), y: -(radius + textOffset) * Math.cos(angle) };
                                 
-                                const percentage = Math.round(i * 100 / (tickCount - 1));
                                 return (
                                     <g key={value} className="text-gray-400">
                                         <line x1={startPoint.x} y1={startPoint.y} x2={endPoint.x} y2={endPoint.y} stroke="currentColor" strokeWidth="2" />
-                                        <text x={textPoint.x} y={textPoint.y} textAnchor="middle" dy="0.35em" fontSize="14" fill="currentColor">
-                                            {percentage}%
+                                        <text x={textPoint.x} y={textPoint.y} textAnchor="middle" dy="0.35em" fontSize="12" fill="currentColor">
+                                            {new Intl.NumberFormat('en-US', { notation: 'compact' }).format(value)}
                                         </text>
                                     </g>
                                 );
@@ -138,11 +138,11 @@ const GaugeChartComponent: React.FC<GaugeChartComponentProps> = ({ config, data,
                                 className="transition-transform duration-500 ease-out"
                                 style={{ transform: `rotate(${valueAngle * (180 / Math.PI)}deg)`}}
                             >
-                               <path d={`M -5 0 L 5 0 L 0 ${-radius * 0.9} Z`} fill="black" />
+                               <path d={`M -5 0 L 5 0 L 0 ${-radius * 0.9} Z`} fill="currentColor" className="text-white" />
                             </g>
 
                              {/* Pivot */}
-                            <circle cx="0" cy="0" r="10" fill="black" />
+                            <circle cx="0" cy="0" r="10" fill="currentColor" className="text-white" />
                             
                             {/* Value Text */}
                             <text

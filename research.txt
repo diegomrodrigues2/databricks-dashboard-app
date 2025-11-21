@@ -1,219 +1,315 @@
 
-Arquitetura Evolutiva para Interfaces de Agentes Cognitivos em React: Da Visualização Passiva à Orquestração Generativa
+Arquitetura Evolutiva para Interfaces Agênticas em React: Da Visualização Passiva à Orquestração Cognitiva de Loop Humano
 
 
-1. Introdução e Análise do Paradigma
+1. Introdução e Mudança de Paradigma Arquitetural
 
-A transformação de interfaces de chat convencionais em sistemas agênticos autônomos representa uma das mudanças mais significativas na engenharia de software frontend contemporânea. O desafio apresentado pela base de código existente — uma aplicação React construída sobre Vite, TypeScript e Tailwind CSS — não é meramente uma questão de adicionar funcionalidades, mas de reestruturar fundamentalmente o fluxo de dados e o modelo de interação usuário-sistema. O código atual, conforme detalhado nos arquivos do projeto diegomrodrigues2-databricks-dashboard-app, estabelece uma fundação robusta para visualização de dados estáticos e interativos, mas opera sob um paradigma de "solicitação-resposta" linear que é insuficiente para as demandas de um agente cognitivo capaz de raciocínio iterativo, execução de ferramentas e manutenção de contexto persistente.
-A análise profunda da estrutura de diretórios e dos componentes revela que a aplicação já possui os primitivos necessários para uma experiência de "Generative UI" (GenUI). A presença de um renderizador dinâmico (DynamicWidgetRenderer.tsx) e de um sistema de tipos rigoroso (types.ts) sugere que o frontend está preparado para renderizar configurações arbitrárias geradas em tempo de execução.1 No entanto, a lacuna arquitetural reside na ausência de um "loop cognitivo" no frontend. Atualmente, o estado da aplicação é reativo à entrada do usuário, mas não proativo na gestão de tarefas complexas que exigem múltiplos passos de execução, como consultar o Databricks, processar os dados e, subsequentemente, decidir qual visualização é a mais adequada.
-Este relatório delineia uma estratégia técnica exaustiva para elevar a arquitetura atual. O objetivo é transitar de um visualizador de dashboards passivo para um orquestrador agêntico que utiliza a biblioteca de componentes existente — de gráficos de dispersão a tabelas de dados editáveis — como ferramentas de expressão. A análise cobrirá desde a reengenharia do protocolo de streaming até a implementação de persistência de sessão via IndexedDB, garantindo que a experiência final não apenas responda a perguntas, mas colabore ativamente com o usuário na exploração de dados.
+A transformação de interfaces de chat convencionais em sistemas agênticos autônomos e colaborativos representa uma das mudanças mais significativas na engenharia de software frontend contemporânea. O desafio apresentado pela base de código existente — uma aplicação React construída sobre Vite, TypeScript e Tailwind CSS, conforme evidenciado nos artefatos do projeto diegomrodrigues2-databricks-dashboard-app — não se resume meramente à adição de funcionalidades isoladas.1 Trata-se, fundamentalmente, de reestruturar o fluxo de dados e o modelo de interação usuário-sistema para suportar um paradigma de computação onde o assistente não apenas responde, mas propõe, questiona e executa.
+A análise profunda da estrutura de diretórios e dos componentes revela que a aplicação já possui os primitivos necessários para uma experiência de "Generative UI" (GenUI). A presença de um renderizador dinâmico em DynamicWidgetRenderer.tsx e de um sistema de tipos rigoroso em types.ts sugere que o frontend está preparado para renderizar configurações arbitrárias geradas em tempo de execução.1 No entanto, a arquitetura atual opera sob um modelo linear de "solicitação-resposta" que é insuficiente para as demandas de um agente cognitivo capaz de raciocínio iterativo, execução de código em tempo real (como queries SQL no Databricks) e manutenção de um contexto persistente e auditável.
+Este relatório delineia uma estratégia técnica exaustiva para elevar a arquitetura atual, atendendo às três funcionalidades críticas solicitadas: confirmação interativa de ações pelo assistente, renderização e execução de código em tempo real, e melhoria substancial na renderização de conteúdo misto (Markdown e Widgets). O objetivo é transitar de um visualizador de dashboards passivo para um orquestrador agêntico que utiliza a biblioteca de componentes existente — de gráficos de dispersão a tabelas de dados editáveis — como ferramentas de expressão, integrando profundamente o humano no loop de decisão (Human-in-the-Loop).
 
-2. Auditoria da Capacidade Atual e Avaliação de Lacunas Arquiteturais
+2. Protocolos de Decisão Interativa: A Arquitetura "Human-in-the-Loop"
 
-Para prescrever uma evolução precisa, é imperativo primeiro dissecar a capacidade técnica instalada. A base de código fornecida demonstra uma maturidade surpreendente em termos de componentização, o que reduz drasticamente o "time-to-market" para a implementação do agente, pois a camada de apresentação já está, em grande parte, resolvida.
+A primeira funcionalidade crítica exigida — permitir que o assistente faça perguntas ao usuário para pedir confirmações, tomar decisões sobre rodar comandos ou seguir planos — exige o abandono do ciclo de chat síncrono tradicional. Na implementação atual, observada no hook useChat.tsx, o estado é binário e reativo: o usuário envia uma mensagem e o sistema entra em um estado de carregamento ou streaming até concluir a resposta.1 Não existe, atualmente, um mecanismo para que o "cérebro" da aplicação (o LLM) pause sua execução e aguarde uma entrada estruturada do usuário que não seja apenas texto livre. Para suportar essa interação bidirecional estruturada, é imperativo introduzir um Protocolo de Estado Suspenso.
 
-2.1 O Motor de Visualização e a Tipagem Estrita
+2.1 Máquina de Estados Finitos (FSM) para Fluxo de Conversação
 
-O ativo mais valioso da aplicação atual reside no diretório components/charts/ e nas definições de tipos associadas em types.ts. A aplicação suporta uma diversidade impressionante de 26 tipos de widgets distintos, variando desde visualizações estatísticas complexas como Box Plots e Candlesticks até ferramentas de entrada de dados como Forms.1
-A análise do arquivo types.ts revela que cada widget possui uma interface de configuração estrita, como BarChartWidgetConfig ou WaterfallChartWidgetConfig. Esta estrutura é fundamental para a integração com Grandes Modelos de Linguagem (LLMs). Diferente de sistemas que tentam gerar código React arbitrário (o que é propenso a erros e vulnerabilidades de segurança), este sistema utiliza uma abordagem de "Configuração como Código". O agente não precisará escrever JavaScript; ele apenas precisará gerar JSONs que aderem a estes esquemas pré-definidos.
-A tabela abaixo resume a complexidade dos esquemas de widget identificados na base de código, que o agente precisará compreender para operar efetivamente:
+O gerenciamento de estado atual no useChat utiliza um campo status com valores limitados a 'idle' | 'thinking' | 'executing_tool' | 'streaming_response'.1 Para viabilizar a confirmação do usuário, esta definição de estado deve ser expandida para incluir um estado de AWAITING_INPUT (Aguardando Entrada). Este estado indica que o agente interrompeu sua thread de execução para solicitar uma decisão humana, efetivamente transferindo o controle de volta para o operador antes de prosseguir com uma operação crítica, como a execução de uma query destrutiva no Databricks ou a modificação de um dashboard existente.
+A introdução deste estado requer uma reformulação do redutor (reducer) no useChat.tsx. Diferente de um simples estado de "erro" ou "sucesso", o estado AWAITING_INPUT deve ser capaz de carregar metadados sobre o que está sendo aguardado. Isso implica que o objeto de estado global da sessão não deve apenas armazenar mensagens, mas também um ponteiro para uma "Promessa Cognitiva" pendente — uma solicitação que o frontend deve renderizar e cuja resolução (seja confirmação ou negação) deve ser devolvida ao agente como uma mensagem de sistema.
+A tabela abaixo detalha a transição de estados proposta e as ações associadas, contrastando o modelo atual com o modelo agêntico necessário:
+Estado Atual
+Evento Gatilho
+Próximo Estado (Proposto)
+Ação do Sistema Frontend
+IDLE
+Mensagem do Usuário
+THINKING
+Envia mensagem para o backend/serviço de chat.
+THINKING
+Token de Stream
+STREAMING
+Atualiza o buffer de UI em tempo real.
+STREAMING
+Tag <command>
+EXECUTING
+Pausa o stream visual, faz parsing do comando.
+EXECUTING
+Ferramenta ask_user
+AWAITING_INPUT
+Renderiza UI de Inquérito. Desbloqueia input contextual.
+AWAITING_INPUT
+Clique do Usuário
+THINKING
+Envia decisão para o backend como Mensagem de Sistema.
+EXECUTING
+Ferramenta searchData
+THINKING
+Auto-executa (se seguro), envia resultado para o backend.
+STREAMING
+Fim do Stream
+IDLE
+Salva o estado da sessão e persiste no IndexedDB.
 
-Categoria de Widget
-Componentes Identificados
-Complexidade do Schema JSON
-Capacidade de Interação Atual
-Indicadores Chave
-KPIComponent, GaugeChartComponent, BulletChartComponent
-Baixa (Valor único + Metadados)
-Filtros de clique (onWidgetClick)
-Distribuição & Estatística
-BoxPlotChartComponent, HistogramChartComponent, ScatterPlotComponent
-Alta (Arrays de objetos, configurações de binning)
-Tooltips avançados, destaque de pontos
-Comparação Categórica
-BarChartComponent, LollipopChartComponent, DotPlotChartComponent
-Média (Eixos X/Y, Agregações)
-Drill-down por categoria
-Dados Tabulares
-TableChartComponent, DataTableComponent, MatrixChartComponent
-Muito Alta (Definição de colunas, formatação condicional)
-Ordenação, Paginação, Edição Inline (potencial)
-Financeiro/Fluxo
-WaterfallChartComponent, CandlestickChartComponent
-Alta (Lógica de cálculo de deltas e OHLC)
-Análise de tendências
-Entrada de Dados
-FormComponent
-Alta (Definição de campos, validação)
-Submissão de dados (Mockado)
+Esta máquina de estados garante que a interface do usuário esteja sempre sincronizada com o processo cognitivo do agente. Quando o sistema entra em AWAITING_INPUT, a barra de entrada de chat (ChatInput.tsx) pode ser desabilitada ou contextualizada, forçando o usuário a interagir com o widget de decisão antes de tentar mudar de assunto, o que previne condições de corrida e desvios de contexto.
 
-A existência de componentes como DataTableComponent com suporte a enableInlineEditing e conditionalFormatting 1 sugere que o agente pode ser instruído a criar interfaces onde o usuário não apenas vê os dados, mas pode corrigi-los, fechando o ciclo de feedback de dados. Além disso, a presença de ChartPanelComponent indica a capacidade de gerar "small multiples" (painéis de gráficos repetidos), uma técnica de visualização avançada que o agente deve ser capaz de alavancar para análises comparativas complexas.
+2.2 Modelagem de Dados para Inquéritos Estruturados
 
-2.2 A Infraestrutura de Streaming e suas Limitações
+Para implementar a interface de decisão, o modelo de dados Message definido em types.ts deve ser rigorosamente aumentado. Atualmente, as mensagens acomodam content, toolCalls, e widgetConfigSnapshot.1 No entanto, depender do parsing de texto natural para identificar quando o agente está fazendo uma pergunta crítica é uma abordagem frágil e propensa a erros. Se o agente perguntar "Você quer continuar?", detectar isso via expressões regulares (Regex) no frontend é ineficaz e pode falhar dependendo da variação linguística.
+A solução robusta reside na formalização de um novo tipo de artefato na comunicação: o StructuredInquiry (Inquérito Estruturado). Este objeto deve ser emitido pelo LLM dentro de uma tag específica ou como uma chamada de ferramenta, contendo todas as informações necessárias para renderizar uma interface de usuário determinística (botões, seletores, formulários).
+A extensão proposta para a definição de tipos em types.ts é a seguinte:
 
-O arquivo utils/streamParser.ts implementa um protocolo rudimentar para separar texto natural de configurações de widgets. Ele busca tokens delimitadores (WIDGET_START_TOKEN e WIDGET_END_TOKEN) para extrair blocos JSON e renderizá-los.1
-Embora funcional para interações simples, esta implementação possui limitações críticas para um sistema agêntico:
-Unidirecionalidade: O parser assume um fluxo contínuo de texto seguido opcionalmente por um widget. Ele não suporta fluxos entrelaçados complexos (ex: texto -> raciocínio -> ferramenta -> texto -> widget).
-Opacidade Cognitiva: Não há mecanismo para distinguir "pensamento interno" (Chain of Thought) da resposta final ao usuário. O requisito de "mostrar traços de raciocínio em tempo real" exige que o parser seja capaz de segregar esses canais de informação.
-Fragilidade a Erros: O bloco try-catch dentro de parseStreamedContent apenas captura falhas de parsing JSON e reverte para texto bruto. Um agente robusto precisa de mecanismos de recuperação de erro mais sofisticados, possivelmente solicitando ao LLM que corrija o JSON malformado.
-
-2.3 O Estado da Sessão e Gerenciamento de Contexto
-
-Atualmente, o estado do chat é gerenciado pelo hook useChat.tsx, que mantém um array simples de mensagens em memória (useState). O arquivo App.tsx orquestra a navegação entre páginas, mas não há evidência de persistência de longo prazo ou gerenciamento de sessões múltiplas, um requisito explícito do usuário ("gostaria de criar uma forma de manter sessões de chat que possam ser acessadas na sidebar").1
-A ausência de um gerenciador de estado global robusto (como Redux Toolkit ou Zustand) ou de uma camada de persistência local (IndexedDB) significa que todo o contexto da conversa é perdido ao recarregar a página. Para um agente que deve "criar dashboards de maneira iterativa", a perda de contexto é catastrófica, pois impede que o usuário refine uma visualização criada em turnos anteriores.
-
-3. A Arquitetura Cognitiva: Do Chat ao Loop de Agente
-
-A transição para uma experiência de agente exige que o frontend deixe de ser apenas uma camada de exibição e passe a atuar como um gerenciador de estado para o processo de raciocínio do modelo. A arquitetura deve suportar o conceito de "Thought Traces" (Traços de Raciocínio) e "Tool Calls" (Chamadas de Ferramenta) como cidadãos de primeira classe, distintos do conteúdo textual exibido ao usuário.
-
-3.1 Redefinição do Modelo de Mensagem
-
-O tipo Message definido em types.ts é atualmente simplista, contendo apenas role, content, timestamp e parsedParts.1 Para suportar raciocínio e uso de ferramentas, este modelo deve ser expandido para acomodar os estados intermediários da cognição do agente.
-O novo modelo de dados deve refletir a natureza assíncrona e multi-etapa do processamento agêntico. Uma mensagem do assistente não é mais um bloco monolítico de texto, mas uma coleção de eventos.
-
-Campo Proposto
-Tipo
-Justificativa e Contexto na Base de Código
-reasoning_trace
-string
-Armazena os passos lógicos (CoT). Deve ser renderizado em um componente colapsável (ex: details HTML ou componente Accordion) dentro de MessageBubble.tsx.1
-tool_invocations
-ToolCall
-Lista de ferramentas chamadas (ex: consultas SQL ao Databricks). Permite mostrar spinners de carregamento específicos por ação.
-tool_results
-ToolResult
-O retorno das ferramentas (dados brutos). Necessário para depuração e para permitir que o usuário inspecione o que foi retornado do backend.
-is_thinking
-boolean
-Flag de estado para animações de UI. Permite que o MessageBubble mostre um indicador visual pulsante enquanto o raciocínio está sendo transmitido.
-active_widget_config
-WidgetConfig
-Snapshot da configuração do widget no momento da mensagem. Crucial para a iteração, permitindo que o usuário reverta alterações indesejadas.
+TypeScript
 
 
-3.2 O Ciclo de Execução no Cliente (Client-Side Tool Loop)
+export type InquiryType = 'confirmation' | 'selection' | 'correction' | 'text_input';
 
-Dado que a conexão com o Databricks é feita via frontend (conforme evidenciado pelo uso de variáveis de ambiente no vite.config.ts e chamadas fetch no chatService.ts 1), o "cérebro" da execução de ferramentas deve residir no cliente.
-O fluxo de controle proposto altera radicalmente o sendMessage em hooks/useChat.tsx. Ao invés de simplesmente enviar texto e esperar texto, o hook deve implementar uma máquina de estados:
-Estado de Raciocínio: O agente emite tokens de pensamento. O parser detecta tags <thought> e atualiza o reasoning_trace na UI.
-Estado de Decisão de Ferramenta: O agente emite uma tag <command tool="query_databricks">. O parser intercepta isso, pausa a renderização de texto e dispara a função JavaScript correspondente em services/dashboardService.ts.1
-Estado de Execução: A aplicação exibe um estado de "Executando Query..." usando componentes de feedback visual. A função getDataForSource é invocada.
-Estado de Observação: O resultado da query (JSON) é capturado pelo frontend. Importante: este resultado é devolvido ao contexto do LLM como uma mensagem de sistema oculta, mas também pode ser exposto ao usuário através do componente Spreadsheet 1, permitindo uma verificação "human-in-the-loop".
-Estado de Resposta Final: O LLM, agora munido dos dados, gera a resposta final em texto e o JSON de configuração do widget (WidgetConfig), que é renderizado pelo DynamicWidgetRenderer.1
+export interface InquiryOption {
+    label: string;
+    value: any;
+    style?: 'danger' | 'primary' | 'neutral';
+    icon?: string; // Referência aos ícones existentes em components/icons
+}
 
-4. Evolução do Protocolo de Comunicação e Parsing
+export interface StructuredInquiry {
+  id: string;
+  type: InquiryType;
+  question: string;
+  description?: string;
+  options?: InquiryOption;
+  defaultValue?: any;
+  timeout?: number; // Tempo em ms para auto-cancelamento (opcional)
+  meta?: Record<string, any>; // Para passar contexto como a query SQL a ser confirmada
+}
 
-O arquivo utils/streamParser.ts é o ponto crítico para habilitar essa nova arquitetura. A lógica atual baseada em indexOf(WIDGET_START_TOKEN) é frágil para fluxos complexos.1 A evolução requer a implementação de um parser baseado em eventos ou tags XML, que é mais robusto para delimitar diferentes tipos de conteúdo em um único stream.
+// Estendendo a interface Message existente 
+export interface Message {
+  //... propriedades existentes (id, role, content, etc.)
+  structuredInquiry?: StructuredInquiry;
+  decision?: {
+    inquiryId: string;
+    value: any;
+    timestamp: Date;
+    userId: string; // Para auditoria em ambientes multi-usuário
+  };
+}
 
-4.1 Estratégia de Tokenização Semântica
 
-Recomenda-se instruir o modelo (via promptFactory.ts) a encapsular diferentes modalidades de saída em tags XML explícitas. Isso permite que o parser frontend atue como um roteador, direcionando o conteúdo para o componente de UI correto.
-A estrutura do stream deve evoluir para algo semelhante a:
+Esta estrutura permite que o componente MessageBubble.tsx identifique inequivocamente quando uma mensagem contém uma solicitação de decisão e renderize o componente apropriado (ex: ConfirmationCard) em vez de apenas texto. Além disso, a propriedade meta é crucial para o requisito de "mostrar uma query que vai executar". O agente pode enviar a query SQL dentro do objeto meta, e o componente de UI pode exibir essa query em um bloco de código colapsável dentro do cartão de confirmação, permitindo inspeção antes da aprovação.
 
+2.3 Renderização do Intersticial Interativo
+
+A implementação visual deste protocolo deve aproveitar o padrão de renderização dinâmica já estabelecido no projeto. O arquivo MessageList.tsx orquestra a lista de mensagens, e MessageBubble.tsx decide como renderizar cada item.1 Quando o hook useChat detecta uma mensagem com structuredInquiry, ele deve acionar uma lógica de renderização especializada.
+Em um cenário de "Confirmação" (por exemplo, rodar um comando DROP TABLE ou uma query pesada no Databricks), a UI não deve ser passiva. O componente deve apresentar o plano — talvez uma lista de itens afetados ou a query SQL bruta — acompanhado de botões claros de "Prosseguir" e "Cancelar". Isso utiliza a lógica de componentes existente, mas aplica-a ao fluxo de controle em vez da visualização de dados.
+O fluxo de interação detalhado seria:
+Detecção de Ambiguidade: O agente, instruído via prompt do sistema (promptFactory.ts), identifica uma ação de risco ou ambiguidade.
+Emissão de Comando: O agente emite um bloco <command tool="ask_user"> contendo o JSON do StructuredInquiry.
+Parsing e Renderização: O streamParser.ts extrai este comando. O ChatWindow renderiza a pergunta. O estado da sessão muda para AWAITING_INPUT.
+Interação do Usuário: O usuário revisa a query apresentada (via meta) e clica em "Confirmar".
+Feedback de Loop: Uma função submitDecision(inquiryId, value) é chamada. Esta função injeta uma mensagem de sistema oculta no histórico: {"role": "system", "content": "User confirmed action."} e dispara novamente o loop sendMessage, permitindo que o agente execute a lógica que estava suspensa.
+
+3. Motor de Renderização e Execução de Código: Sintaxe, Validação e "Code as UI"
+
+O segundo requisito do usuário — um componente para renderizar código que permita mostrar e executar queries contra o Databricks — exige elevar o código a um cidadão de primeira classe na interface. A base de código atual carece de um editor dedicado; o MarkdownRenderer.tsx simplesmente delega blocos de código para o marked, que aplica classes CSS globais definidas em index.html.1 Isso é insuficiente para uma experiência onde o código é executável e editável.
+
+3.1 Arquitetura do CodeExecutionWidget
+
+Para tratar código como uma interface funcional, é necessário introduzir um novo tipo de widget: 'code-executor'. Isso se alinha com o tipo união WidgetConfig em types.ts, que já suporta uma vasta gama de visualizações ('bar', 'line', 'table', etc.).1 A adição deste widget permite que o agente emita blocos de código que não são apenas texto estático, mas mini-aplicações funcionais com estado próprio.
+A configuração do widget proposta deve ser robusta o suficiente para suportar diferentes linguagens (SQL, Python, Scala) e contextos de execução:
+
+TypeScript
+
+
+export interface CodeExecutorWidgetConfig extends BaseWidgetConfig {
+  type: 'code-executor';
+  language: 'sql' | 'python' | 'scala';
+  code: string;
+  isEditable: boolean;
+  autoExecute: boolean; // Se false, requer clique do usuário em "Run"
+  executionId?: string; // Para rastrear execuções longas
+  context?: {
+    catalog?: string;
+    schema?: string;
+    warehouseId?: string; // Específico para Databricks SQL Warehouses
+  };
+}
+
+
+
+3.2 Estratégia de Implementação do Componente
+
+O componente CodeExecutionWidget deve residir em components/charts/ (ou um novo diretório components/widgets/) e integrar-se ao sistema de design existente. Ele requer três camadas funcionais distintas para operar corretamente dentro do ecossistema React/Vite:
+Camada de Editor (Apresentação): Enquanto o index.html fornece estilos básicos para tags pre e code 1, uma interface de agente requer destaque de sintaxe (syntax highlighting) e numeração de linhas. Recomenda-se integrar uma biblioteca leve como react-simple-code-editor combinada com PrismJS para manter a performance alta (evitando o peso do Monaco Editor a menos que estritamente necessário). O componente deve gerenciar o estado local do código (code) para permitir que o usuário faça ajustes finos em uma query SQL gerada pela IA antes de executá-la.
+Camada de Execução (Serviço): Esta camada faz a ponte entre o frontend e o dashboardService.ts. Quando o botão "Executar" é acionado, o componente deve invocar um método de serviço — idealmente uma nova função executeRawQuery a ser adicionada ao dashboardService.ts.
+Nota de Segurança Crítica: O arquivo dashboardService.ts atual utiliza mocks para recuperação de dados (getDataForSource).1 Em um ambiente de produção conectado ao Databricks, a execução de SQL arbitrário gerado por um LLM apresenta riscos severos de injeção e exfiltração de dados. A arquitetura deve garantir que essas queries sejam executadas utilizando um token OBO (On-Behalf-Of) do usuário logado, garantindo que as permissões de acesso aos dados (ACLs) do Databricks sejam respeitadas. O token exposto em vite.config.ts deve ser removido em favor de uma autenticação via backend proxy.
+Camada de Resultado (Visualização): Após a execução bem-sucedida, o widget não deve apenas despejar um JSON bruto. Ele deve aproveitar os componentes ricos já existentes, especificamente o DataTableComponent ou o Spreadsheet.1 O CodeExecutionWidget deve possuir uma propriedade de callback onExecutionSuccess que automaticamente alterna a visualização para o grid de dados, permitindo ordenação, filtragem e exportação (CSV/PNG) utilizando o WidgetExportDropdown.tsx já implementado.
+
+3.3 Integração com o Ciclo Cognitivo
+
+A integração deste widget no fluxo de chat depende da capacidade do agente de "Rascunhar" código. O fluxo seria:
+Pensamento do Agente: "Preciso buscar dados de vendas, mas a query é complexa. Vou rascunhar o SQL e deixar o usuário validar/executar."
+Saída do Agente:
 XML
-
-
-<thought>
-O usuário pediu vendas de frutas. Preciso consultar a tabela 'fruit_sales'.
-</thought>
-<command tool="sql_query">
-SELECT * FROM fruit_sales WHERE year = 2024
-</command>
-<function_result>
-
-</function_result>
-<response>
-Aqui estão as vendas de 2024. Observe o crescimento em Q3.
-</response>
+<thought>Rascunhando SQL para revisão do usuário.</thought>
 <widget>
-{ "type": "bar",... }
+  {
+    "type": "code-executor",
+    "title": "Rascunho de Query: Vendas de Frutas",
+    "language": "sql",
+    "code": "SELECT fruit, sum(sales) FROM fruit_sales GROUP BY fruit",
+    "autoExecute": false,
+    "dataSource": "fruit_sales"
+  }
 </widget>
 
 
+Comportamento do Frontend: O DynamicWidgetRenderer detecta o tipo code-executor e monta o componente. O usuário vê o SQL, talvez corrija um nome de tabela, e clica em "Run". O resultado é então injetado de volta no contexto do chat como uma mensagem de sistema, fechando o loop e permitindo que o agente comente sobre os dados retornados.
 
-4.2 Reengenharia do parseStreamedContent
+4. Renderização Mista Avançada: Resolvendo a Fidelidade do Markdown
 
-A função parseStreamedContent em utils/streamParser.ts deve ser reescrita para funcionar como uma máquina de estados finitos (FSM). Ela deve manter um cursor e um estado atual (READING_TEXT, READING_THOUGHT, READING_WIDGET, READING_COMMAND).
-A detecção de falhas no JSON do widget, atualmente tratada com um try-catch simples que exibe o erro como texto cru 1, deve ser aprimorada. Em um cenário agêntico, um erro de parsing deve idealmente disparar uma "auto-correção": o frontend pode enviar uma mensagem de erro de sistema de volta ao LLM ("Erro: JSON inválido na linha X, por favor corrija"), solicitando uma regeneração sem intervenção do usuário.
+O usuário apontou explicitamente que a renderização de Markdown "não está funcionando muito bem". Uma análise técnica dos arquivos MarkdownRenderer.tsx e index.html revela uma dependência de uma implementação básica da biblioteca marked e estilos CSS globais que conflitam com a estrutura de componentes do React.1 A fragilidade advém frequentemente da colisão entre a sintaxe padrão do Markdown e as tags customizadas XML (<thought>, <command>, <widget>) introduzidas pelo protocolo do agente.
 
-5. Engenharia de Prompt e Injeção de Contexto Iterativa
+4.1 Estratégia de Parsing Baseada em Tokens (Lexical Tokenizer)
 
-A capacidade de "criar dashboards de maneira iterativa" depende inteiramente de como o contexto é gerenciado e reinjetado no prompt do sistema. O arquivo services/chat/promptFactory.ts define atualmente um prompt estático baseado na configuração do app.1 Para suportar iteração, este prompt deve se tornar dinâmico.
+O arquivo streamParser.ts atual utiliza correspondência por expressões regulares simples (como match(THOUGHT_START) e indexOf(WIDGET_START_TOKEN)).1 Esta abordagem é inerentemente frágil em ambientes de streaming, onde um "chunk" de dados pode ser cortado exatamente no meio de uma tag, quebrando o regex e vazando tags brutas para a interface do usuário.
+Para melhorar a confiabilidade, a lógica de parsing deve ser elevada para um Tokenizador Léxico com Buffer. Em vez de dividir strings simples, o parser deve operar como um autômato de pilha (Push-Down Automaton) que mantém um buffer de estado.
+Acumulação de Buffer: Chunks de entrada são anexados a um buffer persistente.
+Detecção de Fronteira: O parser escaneia o buffer em busca de tags de abertura (<thought>, <widget>, ```).
+Isolamento de Conteúdo:
+Texto fora de tags é classificado como Markdown.
+Texto dentro de <thought> é classificado como Reasoning (Raciocínio).
+Texto dentro de blocos JSON de Widget é isolado completamente do parser Markdown para evitar que a biblioteca marked tente formatar chaves JSON como negrito ou itálico (por exemplo, __typename sendo interpretado como negrito).
 
-5.1 O Conceito de "Contexto Ativo"
+4.2 Isolamento de Renderização no Nível do Componente
 
-Quando um usuário diz "mude para um gráfico de linhas", o agente precisa saber o que está sendo exibido atualmente. O useChat deve rastrear a última WidgetConfig gerada com sucesso. Antes de enviar uma nova mensagem do usuário ao LLM, o sistema deve serializar a configuração atual do widget e injetá-la como contexto.
-A função generateSystemPrompt deve ser modificada para aceitar um parâmetro opcional currentWidgetState. Se presente, ela deve anexar instruções específicas: "O usuário está visualizando o seguinte widget:. Aplique as alterações solicitadas sobre esta configuração base."
+O componente MessageBubble.tsx atualmente tenta renderizar o conteúdo de forma linear.1 Para corrigir os problemas visuais, é necessário compartimentalizar a saída. O array parsedParts na interface Message é a abordagem correta, mas precisa de granularidade mais fina.
+Pipeline de Renderização Melhorado:
+Texto Bruto: Deve passar por uma sanitização antes de entrar no MarkdownRenderer.
+Blocos de Código: Não devem ser passados para o MarkdownRenderer se forem destinados à execução. O parser deve interceptar blocos delimitados por ```sql e promovê-los automaticamente para o CodeExecutionWidget. Isso resolve dois problemas simultaneamente: cria visuais melhores (syntax highlighting) e habilita a funcionalidade de execução solicitada na Seção 3.
+Estabilidade de Streaming: Para prevenir saltos de layout (Cumulative Layout Shift) durante a geração de texto, o MarkdownRenderer deve utilizar uma instância memoizada do parser e, preferencialmente, migrar para uma biblioteca como react-markdown com plugins customizados, abandonando a injeção de HTML via dangerouslySetInnerHTML que é atualmente utilizada em MarkdownRenderer.tsx.1
 
-5.2 Aproveitando a Tipagem Estrita para Redução de Alucinações
+4.3 Isolamento de Estilos e CSS
 
-A riqueza de tipos em types.ts é uma vantagem competitiva para a qualidade da geração. O prompt do sistema deve incluir não apenas os nomes dos widgets, mas definições compactas de suas propriedades obrigatórias e opcionais. Por exemplo, ao solicitar um WaterfallChartWidgetConfig, o modelo deve saber que as propriedades totalCategories, positiveColor e negativeColor estão disponíveis.1
-A inclusão dessas definições de tipo no prompt (possivelmente convertendo as interfaces TypeScript para um esquema simplificado ou JSON Schema) reduzirá drasticamente a alucinação de propriedades inexistentes, garantindo que o JSON gerado seja compatível com os componentes React existentes.
+O arquivo index.html contém estilos globais para seletores como .markdown-content h1, .markdown-content table, etc..1 Este escopo global é perigoso em um dashboard complexo, pois estilos de chat podem vazar para os widgets e vice-versa. A recomendação é mover esses estilos para módulos CSS (CSS Modules) ou para uma configuração de plugin de tipografia do Tailwind dentro do próprio MarkdownRenderer.tsx.
+Melhorias específicas para a UI do Chat:
+Tabelas: O CSS atual lida apenas com o básico (border-collapse). Como agentes frequentemente geram tabelas densas, o renderizador deve detectar elementos <table> no output HTML e envolvê-los automaticamente em um div com overflow-x: auto. Isso previne que tabelas largas quebrem o layout do balão de mensagem ou da janela de chat.
+Listas: Deve-se garantir que classes como pl-4 ou padding similar sejam aplicadas a elementos ul/ol para evitar que os marcadores (bullets) desapareçam fora da borda esquerda do balão de mensagem, um problema visual comum em interfaces de chat baseadas em Tailwind.
 
-6. Persistência de Sessão e Integração com Sidebar
+5. Persistência de Dados e Continuidade de Sessão
 
-O requisito de "manter sessões de chat que possam ser acessadas na sidebar" exige uma camada de persistência que o código atual não possui. A Sidebar.tsx atualmente lista dashboards estáticos obtidos de dashboardService.ts.1
+Embora a persistência não tenha sido solicitada explicitamente como um novo recurso visual, a implementação bem-sucedida de "Perguntas do Agente" e "Planos Iterativos" torna obrigatória uma camada de persistência robusta. Se um usuário atualizar a página enquanto um plano está no estado "Aguardando Confirmação", esse estado não pode ser perdido, ou o fluxo de trabalho é quebrado.
 
-6.1 Implementação de Armazenamento Local (IndexedDB)
+5.1 Estratégia de Implementação com IndexedDB
 
-Devido à natureza de protótipo (backend mockado) e ao volume potencial de dados (histórico de chat + grandes JSONs de configuração de widgets + traços de raciocínio), o localStorage é insuficiente devido ao limite de armazenamento (geralmente 5MB) e natureza síncrona. O uso de IndexedDB é a solução arquitetural correta.
-Deve-se criar um novo serviço services/sessionService.ts responsável por:
-Armazenar o histórico completo de mensagens de cada sessão.
-Salvar o estado atual dos widgets associados a cada mensagem.
-Gerenciar metadados da sessão (título, data de criação, última atualização).
+Conforme referenciado no arquivo research.txt e na estrutura de serviços existente (sessionService.ts), o IndexedDB é o mecanismo de armazenamento correto para este volume de dados estruturados.1 O hook useChat deve sincronizar o array de mensagens e o estado atual da máquina (ex: AWAITING_INPUT) com o sessionService.ts.
+A estratégia de hidratação (recarregamento) da sessão deve ser inteligente:
+Recuperação de Estado: Ao carregar, a aplicação deve verificar se a última mensagem da sessão ativa possui um structuredInquiry que ainda não foi respondido (ou seja, sem propriedade decision correspondente).
+Restauração de UI: Se tal estado for detectado, a UI deve restaurar imediatamente o modo "Aguardando Entrada", apresentando novamente os botões de decisão. Isso garante que o contexto crítico de uma decisão pendente (como aprovar uma deleção) persista através de recargas de página ou falhas de rede.
+Persistência de Widgets: Se o agente gerou um snippet de código ou uma configuração de gráfico, essa configuração (o JSON do WidgetConfig) é armazenada dentro do histórico da mensagem. O DynamicWidgetRenderer reconstrói a UI exatamente como ela estava, preservando a integridade visual da conversa.
 
-6.2 Refatoração da Sidebar e Roteamento
+6. Segurança e Governança na Integração com Databricks
 
-A Sidebar.tsx deve ser refatorada para suportar dois modos de visualização ou seções colapsáveis: "Dashboards Fixos" (o comportamento atual) e "Histórico de Conversas".
-O roteamento em App.tsx precisará ser ajustado. Atualmente, ele gerencia currentDashboardId.1 Será necessário introduzir um currentSessionId. Quando uma sessão antiga é selecionada na sidebar:
-O App muda o modo para 'chat'.
-O ChatProvider carrega o histórico de mensagens do IndexedDB correspondente ao ID da sessão.
-A ChatWindow re-renderiza a conversa, restaurando não apenas o texto, mas todos os widgets interativos gerados anteriormente.
+A capacidade de executar queries SQL diretamente da interface de chat introduz vetores de segurança que não existiam na versão de dashboard estático. O código atual em vite.config.ts expõe process.env.DATABRICKS_TOKEN, o que implica que segredos podem estar sendo incluídos no bundle do cliente.1
 
-7. Integração com Databricks e Segurança
+6.1 Riscos de Execução no Cliente
 
-A interação com o Databricks é citada como um objetivo central. O código atual em vite.config.ts expõe process.env.DATABRICKS_TOKEN.1
+Em uma Single Page Application (SPA) como esta, qualquer variável prefixada ou definida no build é incorporada estaticamente ao JavaScript. Um usuário mal-intencionado poderia extrair o Token de Acesso Pessoal (PAT) e executar ações não autorizadas. Para mitigar isso, a arquitetura deve evoluir para um modelo Backend-for-Frontend (BFF).
+Remoção de Segredos do Cliente: O chatService.ts e o dashboardService.ts não devem chamar as APIs do Databricks diretamente usando tokens fixos.
+Proxy de Execução: Deve-se implementar (ou simular, no contexto deste protótipo) um endpoint intermediário que recebe a query e o token de sessão do usuário, valida as permissões, e então repassa a query ao Databricks.
+Validação de Inquérito: Quando o agente pede uma confirmação para uma ação destrutiva (ex: DROP TABLE), essa intenção deve ser assinada criptograficamente ou validada no servidor para garantir que a confirmação do usuário corresponda exatamente à ação que está sendo executada, prevenindo ataques de "Clickjacking" ou modificação de payload no cliente.
 
-7.1 O Risco de Segurança no Cliente
+7. Roteiro de Implementação
 
-É crucial destacar que, em uma aplicação Vite (Single Page Application), variáveis de ambiente prefixadas ou definidas no define são incorporadas estaticamente no bundle JavaScript final. Isso significa que o Token de Acesso Pessoal (PAT) do Databricks estaria visível para qualquer usuário com conhecimento técnico básico ("View Source").
-Para uma arquitetura segura, a comunicação direta Frontend -> Databricks deve ser evitada em produção. A arquitetura deve evoluir para incluir uma camada intermediária (Backend-for-Frontend ou Proxy Serverless). No entanto, mantendo o escopo da solicitação focada na evolução da base de código React existente, a recomendação imediata é abstrair as chamadas de API em um serviço que possa ser facilmente apontado para um proxy no futuro.
+O roteiro a seguir descreve a execução sequencial deste plano arquitetural, priorizando dependências lógicas e estabilidade do sistema.
 
-7.2 Execução de Consultas e Verificação Humana
+Fase 1: Fundação de Protocolo e Estado
 
-A capacidade do agente de executar queries SQL levanta a necessidade de verificação. O agente pode gerar uma query sintaticamente correta que retorna dados incorretos semanticamente.
-Aqui, o componente Spreadsheet.tsx (e o hook useSpreadsheet) torna-se um ativo estratégico subutilizado. Atualmente, ele é usado para "ver dados".1 Na nova arquitetura, sempre que o agente executar uma ferramenta de busca de dados (tool_invocations), a UI deve oferecer proativamente um botão "Inspecionar Dados Brutos". Isso invocaria openSpreadsheet com os dados retornados pela ferramenta, permitindo que o usuário valide os dados no grid antes de confiar na visualização gerada.
-Ainda mais avançado, como o Spreadsheet suporta edição (isEditable), o usuário poderia corrigir um dado errôneo na planilha e instruir o agente: "Refaça o gráfico com os dados corrigidos que acabei de editar". Isso fecha o ciclo de colaboração humano-IA.
+Atualização de Tipos (types.ts): Definir as interfaces StructuredInquiry, CodeExecutorWidgetConfig e atualizar a interface Message para suportar decisões.
+Refatoração do Hook (useChat.tsx): Implementar a FSM expandida (Thinking, AwaitingInput, Executing).
+Melhoria do Parser (streamParser.ts): Implementar o parser baseado em buffer para separar limpo Markdown, JSON e tags XML, garantindo a integridade do streaming.
 
-8. Roteiro de Implementação Incremental
+Fase 2: Componentes Interativos
 
-Com base na análise, apresenta-se um plano de execução faseado para transformar a base de código.
+Criação de InquiryRenderer.tsx: Desenvolver um componente que consome um objeto StructuredInquiry e renderiza a UI apropriada (botões, inputs). Integrar isso ao MessageBubble.
+Construção de CodeExecutionWidget.tsx: Implementar a UI do editor com funcionalidade de "Run/Executar".
+Atualização de Serviço (dashboardService.ts): Adicionar métodos (inicialmente mocks, futuramente reais) para executar queries SQL brutas passadas pelo frontend.
 
-Fase 1: Fundação de Dados e Tipos
+Fase 3: Integração Agêntica
 
-Atualizar types.ts: Expandir a interface Message para incluir reasoning, toolCalls e widgetConfigSnapshot.
-Criar ToolRegistry: Definir interfaces TypeScript para as ferramentas disponíveis (ex: searchData(query: string), listTables()).
-Refatorar useChat: Migrar de useState simples para useReducer para gerenciar as transições de estado complexas (pensando -> executando -> respondendo).
+Engenharia de Prompt (promptFactory.ts): Atualizar as instruções do sistema para ensinar ao LLM o esquema para a tag <command tool="ask_user"> e como formatar SQL para o widget code-executor.
+Feedback de Loop: Conectar as ações de "Run" e "Confirmar" para injetar mensagens de sistema de volta ao chat, acionando o próximo passo do raciocínio do agente.
 
-Fase 2: Protocolo e Visualização do Raciocínio
+Fase 4: Refinamento e Polimento
 
-Atualizar promptFactory.ts: Instruir o modelo a usar tags XML para separar pensamento e comandos.
-Reescrever streamParser.ts: Implementar a máquina de estados para parsing de streams mistos.
-Atualizar MessageBubble.tsx: Adicionar a renderização condicional do bloco de raciocínio (acordeão) e indicadores de status de ferramentas.
+Polimento de Markdown: Substituir dangerouslySetInnerHTML por uma abordagem baseada em árvore de componentes (react-markdown). Aplicar estilos escopados para evitar conflitos.
+Tratamento de Erros: Implementar lógica de "Retry" no CodeExecutionWidget para que usuários possam corrigir erros de sintaxe SQL manualmente sem precisar pedir ao agente para reescrever toda a query.
 
-Fase 3: Execução de Ferramentas e Dados Reais
+8. Conclusão
 
-Implementar Loop de Execução: No useChat, interceptar mensagens de comando, executar a função getDataForSource correspondente (ou a chamada real ao Databricks) e injetar o resultado de volta no chat.
-Integrar Planilha: Adicionar botões de ação nas mensagens do agente que permitem abrir o Spreadsheet com o contexto de dados daquela interação específica.
+A implementação deste plano arquitetural transformará a aplicação "Example Dashboard" de um visualizador de dados passivo em um espaço de trabalho colaborativo e inteligente. A introdução do Protocolo de Estado Suspenso permite a execução segura e confirmada de tarefas sensíveis, alinhando a eficiência da IA com a supervisão humana. O Widget de Execução de Código preenche a lacuna entre a intenção de alto nível e a manipulação de dados de baixo nível, empoderando usuários técnicos. Finalmente, a Renderização de Modo Misto robusta assegura que este diálogo complexo seja apresentado com clareza e estabilidade visual. Esta abordagem alavanca a fundação sólida de React/TypeScript já existente 1, expandindo significativamente o escopo funcional da aplicação em consonância com os padrões mais modernos de Interfaces Agênticas.
 
-Fase 4: Persistência e Histórico
+Especificações Detalhadas de Componentes
 
-Implementar sessionService.ts: Criar camada de abstração sobre IndexedDB.
-Atualizar Sidebar.tsx: Adicionar listagem de sessões recuperadas do serviço.
-Gerenciamento de Contexto: Implementar a lógica de captura do activeWidgetConfig e sua injeção no prompt do sistema para permitir iteração.
 
-9. Conclusão
+Tabela 1: Nova Configuração de Widget - Code Executor
 
-A base de código diegomrodrigues2-databricks-dashboard-app oferece um excelente ponto de partida para a construção de um agente de análise de dados. A riqueza de seus componentes visuais e a estrutura de configuração baseada em JSON alinham-se perfeitamente com as capacidades de geração de código dos LLMs modernos. O desafio principal e a oportunidade residem na implementação de uma camada de orquestração no frontend que possa gerenciar o estado cognitivo do agente e a persistência da sessão. Ao seguir o roteiro proposto, a aplicação evoluirá de um dashboard estático para um analista de dados colaborativo, capaz de raciocinar sobre dados, executar consultas complexas e refinar visualizações em um diálogo contínuo com o usuário.
+Propriedade
+Tipo
+Descrição
+type
+'code-executor'
+Discriminador para o registro de widgets.
+language
+'sql' | 'python'
+Determina o destaque de sintaxe e o backend de execução.
+code
+string
+O rascunho inicial do código gerado pelo agente.
+isEditable
+boolean
+Se o usuário pode modificar o código antes de rodar.
+autoExecute
+boolean
+Se true, roda imediatamente (queries de leitura). Se false, aguarda usuário.
+context
+object
+Metadados opcionais (schema, catalog) necessários para o contexto de execução.
+
+
+Tabela 2: Transições de Estado do Chat
+
+Estado Atual
+Evento
+Próximo Estado
+Ação
+IDLE
+Mensagem do Usuário
+THINKING
+Enviar mensagem ao backend.
+THINKING
+Token de Stream
+STREAMING
+Atualizar buffer da UI.
+STREAMING
+Tag <command>
+EXECUTING
+Pausar stream, analisar comando.
+EXECUTING
+Ferramenta ask_user
+AWAITING_INPUT
+Renderizar UI de Inquérito. Desbloquear input (contextual).
+AWAITING_INPUT
+Clique do Usuário
+THINKING
+Enviar decisão ao backend como Msg de Sistema.
+EXECUTING
+Ferramenta searchData
+THINKING
+Auto-executar, enviar resultado ao backend.
+STREAMING
+Fim do Stream
+IDLE
+Salvar estado da sessão.
+
+Esta estrutura garante que cada interação seja determinística e recuperável, resolvendo os requisitos centrais de confiabilidade e interatividade solicitados pelo usuário.
 Works cited
-diegomrodrigues2-databricks-dashboard-app-8a5edab282632443 (1).txt
+diegomrodrigues2-databricks-dashboard-app-8a5edab282632443 (2).txt

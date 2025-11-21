@@ -10,6 +10,8 @@ import MarkdownRenderer from './MarkdownRenderer';
 import { parseStreamedContent } from '../../utils/streamParser';
 import DynamicWidgetRenderer from './DynamicWidgetRenderer';
 import { useSpreadsheet } from '../../hooks/useSpreadsheet';
+import { useChat } from '../../hooks/useChat';
+import InquiryRenderer from './InquiryRenderer';
 
 interface MessageBubbleProps {
   message: Message;
@@ -22,6 +24,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
   const [isReasoningOpen, setIsReasoningOpen] = useState(false);
   const [isSystemDetailsOpen, setIsSystemDetailsOpen] = useState(false);
   const { openSpreadsheet } = useSpreadsheet();
+  const { submitDecision, submitCodeExecutionResult } = useChat();
 
   const parsedResult = useMemo(() => {
     if (isUser || isSystem) return null; 
@@ -145,9 +148,24 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
                     if (part.type === 'text') {
                         return <MarkdownRenderer key={index} content={part.content} />;
                     } else {
-                        return <DynamicWidgetRenderer key={index} config={part.config} />;
+                        return (
+                          <DynamicWidgetRenderer 
+                            key={index} 
+                            config={part.config} 
+                            onCodeExecuted={(code, result) => submitCodeExecutionResult(code, result)}
+                          />
+                        );
                     }
                 })}
+
+                {/* Structured Inquiry (Confirmation/Selection) */}
+                {message.structuredInquiry && (
+                    <InquiryRenderer 
+                        inquiry={message.structuredInquiry}
+                        decision={message.decision}
+                        onDecision={(value) => submitDecision(message.structuredInquiry!.id, value)}
+                    />
+                )}
             </div>
           )}
         </div>

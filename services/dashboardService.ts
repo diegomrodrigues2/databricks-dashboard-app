@@ -149,3 +149,45 @@ export const getDataForSource = (sourceName: string): Promise<any[]> => {
             return Promise.resolve([]);
     }
 };
+
+export const executeRawQuery = async (query: string, language: string): Promise<any[]> => {
+    // Mock delay to simulate network request
+    await new Promise(resolve => setTimeout(resolve, 1000));
+
+    if (language === 'python') {
+        return Promise.resolve([{ output: "Python execution is mocked. Result: [1, 2, 3, 4, 5]" }]);
+    }
+
+    // Simple keyword matching for SQL mocks
+    const lowerQuery = query.toLowerCase();
+    let data: any[] = [];
+    
+    if (lowerQuery.includes('fruit_sales') && !lowerQuery.includes('growth')) {
+        data = await getFruitSalesData();
+    } else if (lowerQuery.includes('growth')) {
+        data = await getFruitSalesGrowthData();
+    } else if (lowerQuery.includes('revenue')) {
+        data = await getFruitRevenueData();
+    } else if (lowerQuery.includes('price')) {
+        data = await getFruitPriceData();
+    } else if (lowerQuery.includes('chocolate')) {
+        data = await getChocolateSalesData();
+    } else if (lowerQuery.includes('stock') || lowerQuery.includes('basket')) {
+        data = await getFruitBasketCorpStockData();
+    } else {
+        // Default fallback
+         data = [
+            { id: 1, message: "Query executed successfully", rows_affected: 0 },
+            { id: 2, message: "No specific mock data matched", result: "Empty set" }
+        ];
+    }
+
+    // Simple LIMIT emulation for the mock
+    const limitMatch = query.match(/LIMIT\s+(\d+)/i);
+    if (limitMatch && data.length > 0) {
+        const limit = parseInt(limitMatch[1], 10);
+        return data.slice(0, limit);
+    }
+
+    return data;
+};

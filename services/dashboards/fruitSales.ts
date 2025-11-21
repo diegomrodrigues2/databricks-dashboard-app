@@ -1,5 +1,4 @@
 
-
 import type { AppConfig } from '../../types';
 
 const mockFruitSalesData = [
@@ -612,6 +611,19 @@ export const fruitSalesDashboardConfig: AppConfig = {
             }
         ],
         widgets: [
+            {
+                id: 'code-executor-demo',
+                type: 'code-executor',
+                dataSource: 'fruit_sales',
+                title: 'Execute Custom Query',
+                description: 'Run SQL or Python code to analyze data',
+                gridWidth: 12,
+                gridHeight: 6,
+                language: 'sql',
+                code: 'SELECT * FROM fruit_sales WHERE organic > 1.5',
+                isEditable: true,
+                autoExecute: false
+            },
              {
                 id: 'fruitbasket-stock-candlestick',
                 type: 'candlestick',
@@ -928,7 +940,7 @@ export const fruitSalesDashboardConfig: AppConfig = {
                 valueColumn: 'applicable',
                 yesColor: '#3B82F6', // blue-500
                 noColor: '#9CA3AF' // gray-400
-             },
+            },
              {
                 id: 'mango-revenue-waterfall',
                 type: 'waterfall',

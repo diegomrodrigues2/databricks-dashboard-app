@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useReducer, useMemo, useCallback, useEffect } from 'react';
-import type { Message, ToolCall, Session } from '../types';
+import type { Message, ToolCall, Session, StructuredInquiry } from '../types';
 import { streamChatResponse } from '../services/chatService';
 import { parseStreamedContent } from '../utils/streamParser';
 import { getDataForSource } from '../services/dashboardService';
@@ -8,7 +8,7 @@ import { saveSession, getSession, createSession, deleteSession as deleteSessionS
 interface ChatState {
   messages: Message[];
   isChatOpen: boolean;
-  status: 'idle' | 'thinking' | 'executing_tool' | 'streaming_response';
+  status: 'idle' | 'thinking' | 'executing_tool' | 'streaming_response' | 'awaiting_input';
   activeToolCallId: string | null;
   currentSessionId: string | null;
 }
@@ -28,7 +28,9 @@ type ChatAction =
   | { type: 'SET_STATUS'; payload: ChatState['status'] }
   | { type: 'CLEAR_MESSAGES' }
   | { type: 'SET_ACTIVE_TOOL_CALL'; payload: string | null }
-  | { type: 'SET_SESSION'; payload: Session };
+  | { type: 'SET_SESSION'; payload: Session }
+  | { type: 'SET_INQUIRY'; payload: { messageId: string; inquiry: StructuredInquiry } }
+  | { type: 'SUBMIT_DECISION'; payload: { inquiryId: string; value: any; userId: string } };
 
 const initialState: ChatState = {
   messages: [],
@@ -177,6 +179,37 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
             activeToolCallId: null
         };
 
+    case 'SET_INQUIRY':
+        return {
+            ...state,
+            status: 'awaiting_input',
+            messages: state.messages.map(msg => 
+                msg.id === action.payload.messageId 
+                    ? { ...msg, structuredInquiry: action.payload.inquiry } 
+                    : msg
+            )
+        };
+
+    case 'SUBMIT_DECISION':
+        return {
+            ...state,
+            status: 'thinking',
+            messages: state.messages.map(msg => {
+                if (msg.structuredInquiry?.id === action.payload.inquiryId) {
+                    return {
+                        ...msg,
+                        decision: {
+                            inquiryId: action.payload.inquiryId,
+                            value: action.payload.value,
+                            timestamp: new Date(),
+                            userId: action.payload.userId
+                        }
+                    };
+                }
+                return msg;
+            })
+        };
+
     default:
       return state;
   }
@@ -190,6 +223,8 @@ interface ChatContextType {
   activeToolCallId: string | null;
   currentSessionId: string | null;
   sendMessage: (content: string) => Promise<void>;
+  submitDecision: (inquiryId: string, value: any) => Promise<void>;
+  submitCodeExecutionResult: (code: string, result: any) => Promise<void>;
   clearMessages: () => void;
   loadSession: (id: string) => Promise<void>;
   createNewSession: () => void;
@@ -287,6 +322,13 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
                    data: ['fruit_sales', 'mango_revenue', 'fruit_taste_data'],
                    summary: 'Listed available tables'
                };
+          } else if (command.tool === 'ask_user') {
+              // This shouldn't strictly be executed as a tool in the background, 
+              // but if it were, it would return "Waiting for user input"
+              return {
+                  status: 'pending',
+                  summary: 'Waiting for user input'
+              };
           }
           
           return {
@@ -299,6 +341,97 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
               error: error instanceof Error ? error.message : String(error)
           };
       }
+  };
+
+  const processResponseLoop = async (initialHistory: Message[]) => {
+      let currentHistory = [...initialHistory];
+      let continueLoop = true;
+      let loopCount = 0;
+      const MAX_LOOPS = 5;
+
+      while (continueLoop && loopCount < MAX_LOOPS) {
+          loopCount++;
+          
+          let currentAssistantMessageId = `${Date.now()}-assistant-${loopCount}`;
+          const assistantMessage: Message = {
+              id: currentAssistantMessageId,
+              role: 'assistant',
+              content: '',
+              timestamp: new Date(),
+          };
+          
+          dispatch({ type: 'ADD_ASSISTANT_MESSAGE', payload: assistantMessage });
+          
+          let accumulatedResponse = '';
+          let toolFound = false;
+          
+          try {
+              await streamChatResponse(currentHistory, (chunk) => {
+                  accumulatedResponse += chunk;
+                  dispatch({
+                      type: 'RECEIVE_TOKEN',
+                      payload: { messageId: currentAssistantMessageId, chunk },
+                  });
+              });
+          } catch (error) {
+              console.error("Failed to stream response:", error);
+               dispatch({
+                type: 'UPDATE_STREAM',
+                payload: {
+                  messageId: currentAssistantMessageId,
+                  content: "\n\n*Error: Failed to generate response.*",
+                },
+              });
+              dispatch({ type: 'SET_STATUS', payload: 'idle' });
+              return;
+          }
+
+          const { command } = parseStreamedContent(accumulatedResponse);
+          
+          // Update history with the full assistant message
+           const assistantMsgFinished: Message = {
+              id: currentAssistantMessageId,
+              role: 'assistant',
+              content: accumulatedResponse,
+              timestamp: new Date()
+          };
+          currentHistory = [...currentHistory, assistantMsgFinished];
+
+          if (command) {
+              if (command.tool === 'ask_user') {
+                   try {
+                       const inquiry = JSON.parse(command.params) as StructuredInquiry;
+                       dispatch({ 
+                           type: 'SET_INQUIRY', 
+                           payload: { messageId: currentAssistantMessageId, inquiry } 
+                       });
+                       // Break the loop and wait for user
+                       return; 
+                   } catch (e) {
+                       console.error("Failed to parse inquiry", e);
+                   }
+              }
+              
+              dispatch({ type: 'SET_STATUS', payload: 'executing_tool' });
+              const result = await executeToolCall(command);
+
+              const systemMessage: Message = {
+                  id: `${Date.now()}-system`,
+                  role: 'system',
+                  content: JSON.stringify(result),
+                  timestamp: new Date(),
+              };
+
+              dispatch({ type: 'ADD_SYSTEM_MESSAGE', payload: systemMessage });
+              
+              currentHistory = [...currentHistory, systemMessage];
+              // Continue loop to get next response from assistant based on tool result
+          } else {
+              continueLoop = false;
+          }
+      }
+      
+      dispatch({ type: 'SET_STATUS', payload: 'idle' });
   };
 
   const sendMessage = useCallback(async (content: string) => {
@@ -320,88 +453,76 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     dispatch({ type: 'SEND_MESSAGE', payload: userMessage });
 
-    let currentAssistantMessageId = `${Date.now()}-assistant`;
-    const assistantMessage: Message = {
-      id: currentAssistantMessageId,
-      role: 'assistant',
-      content: '',
-      timestamp: new Date(),
-    };
-
-    dispatch({ type: 'ADD_ASSISTANT_MESSAGE', payload: assistantMessage });
-
-    let currentHistory = [...state.messages, userMessage];
+    const currentHistory = [...state.messages, userMessage];
     
-    try {
-      let continueLoop = true;
-      let loopCount = 0;
-      const MAX_LOOPS = 5;
-
-      while (continueLoop && loopCount < MAX_LOOPS) {
-          loopCount++;
-          let accumulatedResponse = '';
-          
-          await streamChatResponse(currentHistory, (chunk) => {
-            accumulatedResponse += chunk;
-            dispatch({
-              type: 'RECEIVE_TOKEN',
-              payload: { messageId: currentAssistantMessageId, chunk },
-            });
-          });
-
-          const { command } = parseStreamedContent(accumulatedResponse);
-
-          if (command) {
-              dispatch({ type: 'SET_STATUS', payload: 'executing_tool' });
-
-              const result = await executeToolCall(command);
-
-              const systemMessage: Message = {
-                  id: `${Date.now()}-system`,
-                  role: 'system',
-                  content: JSON.stringify(result),
-                  timestamp: new Date(),
-              };
-
-              dispatch({ type: 'ADD_SYSTEM_MESSAGE', payload: systemMessage });
-
-              const assistantMsgSoFar: Message = {
-                  id: currentAssistantMessageId,
-                  role: 'assistant',
-                  content: accumulatedResponse,
-                  timestamp: new Date()
-              };
-              
-              currentHistory = [...currentHistory, assistantMsgSoFar, systemMessage];
-
-              currentAssistantMessageId = `${Date.now()}-assistant-${loopCount}`;
-              const nextAssistantMessage: Message = {
-                  id: currentAssistantMessageId,
-                  role: 'assistant',
-                  content: '',
-                  timestamp: new Date(),
-              };
-              
-              dispatch({ type: 'ADD_ASSISTANT_MESSAGE', payload: nextAssistantMessage });
-              
-          } else {
-              continueLoop = false;
-          }
-      }
-
-      dispatch({ type: 'SET_STATUS', payload: 'idle' });
-    } catch (error) {
-      console.error("Failed to send message:", error);
-      dispatch({
-        type: 'UPDATE_STREAM',
-        payload: {
-          messageId: currentAssistantMessageId,
-          content: "\n\n*Error: Failed to generate response.*",
-        },
-      });
-      dispatch({ type: 'SET_STATUS', payload: 'idle' });
-    }
+    await processResponseLoop(currentHistory);
   }, [state.messages, state.currentSessionId]);
+
+  const submitDecision = useCallback(async (inquiryId: string, value: any) => {
+      // 1. Dispatch local state update
+      dispatch({ 
+          type: 'SUBMIT_DECISION', 
+          payload: { 
+              inquiryId, 
+              value, 
+              userId: 'user-1' // Mock user ID
+          } 
+      });
+
+      // 2. Add System Message logging the decision
+      const decisionMsg: Message = {
+          id: `${Date.now()}-system-decision`,
+          role: 'system',
+          content: JSON.stringify({ 
+              type: 'decision', 
+              inquiryId, 
+              value,
+              summary: `User decided: ${value}`
+          }),
+          timestamp: new Date()
+      };
+      dispatch({ type: 'ADD_SYSTEM_MESSAGE', payload: decisionMsg });
+
+      // 3. Resume the chat loop
+      const updatedMessages = state.messages.map(msg => {
+         if (msg.structuredInquiry?.id === inquiryId) {
+             return {
+                 ...msg,
+                 decision: {
+                     inquiryId,
+                     value,
+                     timestamp: new Date(),
+                     userId: 'user-1'
+                 }
+             };
+         }
+         return msg;
+      });
+
+      const newHistory = [...updatedMessages, decisionMsg];
+      await processResponseLoop(newHistory);
+
+  }, [state.messages]); // Depend on messages to reconstruct history
+
+  const submitCodeExecutionResult = useCallback(async (code: string, result: any) => {
+      // Add System Message logging the execution result
+      const executionMsg: Message = {
+          id: `${Date.now()}-system-execution`,
+          role: 'system',
+          content: JSON.stringify({ 
+              type: 'execution_result', 
+              code,
+              result_summary: Array.isArray(result) ? `Returned ${result.length} rows.` : 'Execution completed.',
+              result_preview: Array.isArray(result) ? result.slice(0, 5) : result
+          }),
+          timestamp: new Date()
+      };
+      dispatch({ type: 'ADD_SYSTEM_MESSAGE', payload: executionMsg });
+
+      // Resume the chat loop with updated history
+      const newHistory = [...state.messages, executionMsg];
+      await processResponseLoop(newHistory);
+  }, [state.messages]);
 
   const clearMessages = useCallback(() => {
     dispatch({ type: 'CLEAR_MESSAGES' });
@@ -416,6 +537,8 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
       activeToolCallId: state.activeToolCallId,
       currentSessionId: state.currentSessionId,
       sendMessage,
+      submitDecision,
+      submitCodeExecutionResult,
       clearMessages,
       loadSession,
       createNewSession,
@@ -423,7 +546,7 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
       deleteSession,
       clearAllHistory
     }),
-    [state.isChatOpen, state.messages, state.status, state.activeToolCallId, state.currentSessionId, toggleChat, sendMessage, clearMessages, loadSession, createNewSession, renameSession, deleteSession, clearAllHistory]
+    [state.isChatOpen, state.messages, state.status, state.activeToolCallId, state.currentSessionId, toggleChat, sendMessage, submitDecision, clearMessages, loadSession, createNewSession, renameSession, deleteSession, clearAllHistory]
   );
 
   return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>;
