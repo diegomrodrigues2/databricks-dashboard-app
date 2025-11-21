@@ -26,8 +26,10 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
   const formattedTime = message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const [isReasoningOpen, setIsReasoningOpen] = useState(false);
   const [isSystemDetailsOpen, setIsSystemDetailsOpen] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editContent, setEditContent] = useState(message.content);
   const { openSpreadsheet } = useSpreadsheet();
-  const { submitDecision, submitCodeExecutionResult, navigateBranch } = useChat(); // Added navigateBranch
+  const { submitDecision, submitCodeExecutionResult, navigateBranch, editUserMessage } = useChat(); // Added editUserMessage
 
   // Identify Agent if assistant
   // We assume message might have an 'authorId' or we default to System Default if unknown
@@ -81,26 +83,15 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
   const handlePrevBranch = () => {
       if (!message.childrenIds) return;
       const newIndex = Math.max(0, currentVersionIndex - 1);
-      const leafOfNewBranch = findLeafOfBranch(message.childrenIds[newIndex]); // We need to find the leaf of that branch to navigate
-      // Wait, navigateBranch takes a LEAF id.
-      // If we just switch to a child, we need to know the leaf of that child's path.
-      // This is complex without a global map lookup.
-      // Simplified: Just navigate to the child itself? No, it must be a leaf to reconstruct thread.
-      // We need a helper in useChat or here to "find arbitrary leaf from node".
-      // For now, let's assume we can't easily implement full history navigation without the global map.
-      // WORKAROUND: Use a "Navigate to Node" action if we support it, or just traverse down to the latest leaf of that branch.
-      // Let's assume `navigateBranch` can accept a non-leaf and find its leaf? No, `getThreadFromLeaf` goes up.
-      
-      // We will disable this button if we can't implement it safely in this turn.
-      // Actually, we can use `useChat`'s messageMap if we exposed it, but we only exposed linear messages.
-      // Let's expose `navigateBranch` which expects a leaf.
-      // I'll skip the full implementation of "finding the leaf" in the UI component for now to avoid over-engineering 
-      // and stick to the requirements: "Add < and > buttons".
-      console.log("Navigating to prev branch (Implementation pending full graph traversal access)");
+      const targetChildId = message.childrenIds[newIndex];
+      navigateBranch(targetChildId);
   };
 
   const handleNextBranch = () => {
-       console.log("Navigating to next branch");
+       if (!message.childrenIds) return;
+       const newIndex = Math.min(message.childrenIds.length - 1, currentVersionIndex + 1);
+       const targetChildId = message.childrenIds[newIndex];
+       navigateBranch(targetChildId);
   };
   
   // Helper to find leaf (mocked for UI structure)
@@ -116,15 +107,31 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
   if (isSystem) {
       let hasData = false;
       let toolData: any[] = [];
+      let isToolResult = false;
       
       try {
           const parsedContent = JSON.parse(message.content);
-          if (parsedContent && Array.isArray(parsedContent.data)) {
-              hasData = true;
-              toolData = parsedContent.data;
+          // Check if it looks like a tool result or structured system message
+          if (typeof parsedContent === 'object' && parsedContent !== null) {
+               isToolResult = true;
+              if (Array.isArray(parsedContent.data)) {
+                  hasData = true;
+                  toolData = parsedContent.data;
+              }
           }
       } catch (e) {
           // Ignore parse errors
+          isToolResult = false;
+      }
+
+      if (!isToolResult) {
+           return (
+              <div className="flex justify-center w-full my-4">
+                  <div className="text-xs text-gray-400 bg-gray-800/30 px-4 py-2 rounded-lg border border-gray-700/30 text-center max-w-lg">
+                      <MarkdownRenderer content={message.content} />
+                  </div>
+              </div>
+          );
       }
 
       const handleViewData = () => {
@@ -210,18 +217,55 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
         } w-full relative group`}>
           
           {/* Edit Button for Branching (Only visible on hover for User messages) */}
-          {isUser && (
+          {isUser && !isEditing && (
               <button 
                 className="absolute -left-8 top-2 p-1 text-gray-500 hover:text-white opacity-0 group-hover:opacity-100 transition-opacity"
                 title="Edit to create new branch"
-                onClick={() => console.log("Branch edit click")}
+                onClick={() => {
+                    setEditContent(message.content);
+                    setIsEditing(true);
+                }}
               >
                   <PencilIcon className="w-4 h-4" />
               </button>
           )}
 
           {isUser ? (
-            <p className="text-sm whitespace-pre-wrap break-words">{message.content}</p>
+            isEditing ? (
+                <div className="flex flex-col gap-2 w-full min-w-[300px]">
+                    <textarea
+                        value={editContent}
+                        onChange={(e) => setEditContent(e.target.value)}
+                        className="w-full bg-blue-700 text-white text-sm p-2 rounded border border-blue-500 focus:outline-none focus:border-white resize-none"
+                        rows={Math.max(3, editContent.split('\n').length)}
+                        autoFocus
+                    />
+                    <div className="flex justify-end gap-2">
+                        <button
+                            onClick={() => {
+                                if (editContent.trim() !== message.content) {
+                                    editUserMessage(message.id, editContent);
+                                }
+                                setIsEditing(false);
+                            }}
+                            className="text-xs bg-white text-blue-600 px-3 py-1.5 rounded font-bold hover:bg-blue-50 transition-colors shadow-sm"
+                        >
+                            Save & Branch
+                        </button>
+                        <button
+                            onClick={() => {
+                                setEditContent(message.content);
+                                setIsEditing(false);
+                            }}
+                            className="text-xs text-blue-200 hover:text-white px-2 py-1.5"
+                        >
+                            Cancel
+                        </button>
+                    </div>
+                </div>
+            ) : (
+                <p className="text-sm whitespace-pre-wrap break-words">{message.content}</p>
+            )
           ) : (
             <div className="flex flex-col gap-2">
                 {/* Reasoning / Chain of Thought Block */}
@@ -308,12 +352,6 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
     </div>
   );
 };
-
-function findLeafOfBranch(nodeId: string): string {
-    // Placeholder logic since we don't have graph access here.
-    // In reality, this needs to traverse down to the last active leaf of this branch.
-    return nodeId; 
-}
 
 export default MessageBubble;
 

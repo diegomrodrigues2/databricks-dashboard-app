@@ -19,7 +19,7 @@ interface SessionSetupProps {
 }
 
 const SessionSetup: React.FC<SessionSetupProps> = ({ onStart }) => {
-  const { createNewSession, switchAgent } = useChat(); // In a real app, we'd have a setSessionConfig action
+  const { switchAgent, addSystemMessage } = useChat(); // In a real app, we'd have a setSessionConfig action
   
   // Local state for configuration before confirming
   const [selectedMode, setSelectedMode] = useState<ChatMode>('deep-analysis');
@@ -31,6 +31,12 @@ const SessionSetup: React.FC<SessionSetupProps> = ({ onStart }) => {
   const handleStartSession = () => {
     // 1. Configure the session
     switchAgent(selectedAgentId);
+    
+    const modeLabel = MODES.find(m => m.mode === selectedMode)?.label || selectedMode;
+    const agentName = DEFAULT_AGENTS.find(a => a.id === selectedAgentId)?.name || selectedAgentId;
+    
+    addSystemMessage(`Session started.\nMode: **${modeLabel}**\nAgent: **${agentName}**\nTools: ${enabledTools.length} enabled`);
+
     // 2. Notify parent
     onStart();
   };

@@ -324,6 +324,8 @@ interface ChatContextType {
   clearAllHistory: () => Promise<void>;
   navigateBranch: (leafId: string) => void;
   switchAgent: (agentId: string) => void;
+  editUserMessage: (originalMessageId: string, newContent: string) => Promise<void>;
+  addSystemMessage: (content: string) => void;
 }
 
 const ChatContext = createContext<ChatContextType | undefined>(undefined);
@@ -339,7 +341,7 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Persist session whenever status returns to idle and we have a session ID
   useEffect(() => {
-      if (state.status === 'idle' && state.currentSessionId) {
+      if (state.status === 'idle' && state.currentSessionId && messages.length > 0) {
           const session: Session = {
               id: state.currentSessionId,
               title: messages[0]?.content.slice(0, 50) || 'New Chat',
@@ -409,9 +411,46 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
       dispatch({ type: 'NAVIGATE_BRANCH', payload: { leafId } });
   }, []);
 
+  const editUserMessage = useCallback(async (originalMessageId: string, newContent: string) => {
+    const originalMessage = state.messageMap[originalMessageId];
+    if (!originalMessage) {
+        console.error("Cannot edit message: Message not found");
+        return;
+    }
+
+    const newMessage: TreeMessage = {
+        id: `${Date.now()}-user`,
+        role: 'user',
+        content: newContent,
+        timestamp: new Date(),
+        parentId: originalMessage.parentId, // Branching off from the same parent
+        childrenIds: []
+    };
+
+    dispatch({ type: 'SEND_MESSAGE', payload: newMessage });
+
+    // Reconstruct history including the new message
+    const parentThread = getThreadFromLeaf(originalMessage.parentId, state.messageMap);
+    const currentHistory = [...parentThread, newMessage];
+
+    await processResponseLoop(currentHistory);
+  }, [state.messageMap, state.activeAgentId]); // Depends on state for messageMap and processResponseLoop's closure
+
   const switchAgent = useCallback((agentId: string) => {
       dispatch({ type: 'SWITCH_AGENT', payload: { agentId } });
   }, []);
+
+  const addSystemMessage = useCallback((content: string) => {
+    const systemMessage: TreeMessage = {
+        id: `${Date.now()}-system`,
+        role: 'system',
+        content,
+        timestamp: new Date(),
+        parentId: state.currentLeafId,
+        childrenIds: []
+    };
+    dispatch({ type: 'ADD_SYSTEM_MESSAGE', payload: systemMessage });
+  }, [state.currentLeafId]);
 
 
   const executeToolCall = async (command: { tool: string, params: string }) => {
@@ -691,9 +730,11 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
       deleteSession,
       clearAllHistory,
       navigateBranch,
-      switchAgent
+      editUserMessage,
+      switchAgent,
+      addSystemMessage
     }),
-    [state.isChatOpen, messages, state.status, state.activeToolCallId, state.currentSessionId, state.activeAgentId, toggleChat, sendMessage, submitDecision, clearMessages, loadSession, createNewSession, renameSession, deleteSession, clearAllHistory, navigateBranch, switchAgent]
+    [state.isChatOpen, messages, state.status, state.activeToolCallId, state.currentSessionId, state.activeAgentId, toggleChat, sendMessage, submitDecision, clearMessages, loadSession, createNewSession, renameSession, deleteSession, clearAllHistory, navigateBranch, editUserMessage, switchAgent, addSystemMessage]
   );
 
   return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>;
