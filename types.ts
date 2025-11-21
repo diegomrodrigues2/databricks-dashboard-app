@@ -665,10 +665,47 @@ export interface Message {
   };
 }
 
+export type ChatMode = 'fast-response' | 'deep-analysis' | 'code-generation' | 'creative';
+
+export interface SessionConfig {
+  mode: ChatMode;
+  allowedTools: string[];
+  modelTemperature?: number;
+}
+
+export interface AgentDefinition {
+  id: string;
+  name: string;
+  role: string;
+  description: string;
+  avatarUrl?: string;
+  baseSystemPrompt: string;
+  defaultTools: string[];
+  capabilities: {
+    canGenerateCharts: boolean;
+    canExecuteCode: boolean;
+    canBrowseInternet: boolean;
+  };
+  style: {
+    tone: 'formal' | 'casual' | 'didactic' | 'concise';
+    verboseReasoning: boolean;
+  };
+  isSystemDefault: boolean;
+}
+
+export interface TreeMessage extends Message {
+  parentId: string | null;
+  childrenIds: string[];
+}
+
 export interface Session {
   id: string;
   title: string;
-  messages: Message[];
+  config?: SessionConfig;
+  messageMap: Record<string, TreeMessage>;
+  currentLeafId: string | null;
+  // Legacy support for smooth transition
+  messages?: Message[];
   createdAt: number;
   updatedAt: number;
 }

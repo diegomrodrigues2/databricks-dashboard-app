@@ -6,8 +6,9 @@ import 'prismjs/components/prism-python';
 import 'prismjs/themes/prism-tomorrow.css'; // Use a dark theme
 
 import { CodeExecutorWidgetConfig } from '../../types';
-import { executeRawQuery } from '../../services/dashboardService';
 import TableChartComponent from '../charts/TableChartComponent'; // Using TableChartComponent as a simple grid
+import { ExclamationTriangleIcon } from '../icons/ExclamationTriangleIcon';
+import { executeCodeSafe, analyzeRisk } from '../../services/executionService';
 
 interface CodeExecutionWidgetProps {
     config: CodeExecutorWidgetConfig;
@@ -15,27 +16,47 @@ interface CodeExecutionWidgetProps {
 }
 
 export const CodeExecutionWidget: React.FC<CodeExecutionWidgetProps> = ({ config, onExecute }) => {
+    // Enforce safety defaults immediately on init
+    const riskLevel = analyzeRisk(config.code || '');
+    const safeAutoExecute = config.autoExecute && riskLevel === 'low';
+
     const [code, setCode] = useState(config.code || '');
     const [isExecuting, setIsExecuting] = useState(false);
     const [result, setResult] = useState<any[] | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [viewMode, setViewMode] = useState<'editor' | 'result'>('editor');
+    const [currentRisk, setCurrentRisk] = useState<'low' | 'high'>(riskLevel);
 
     useEffect(() => {
-        if (config.autoExecute) {
+        if (safeAutoExecute) {
             handleExecute();
         }
     }, []);
 
+    // Re-analyze risk when code changes
+    useEffect(() => {
+        setCurrentRisk(analyzeRisk(code));
+    }, [code]);
+
     const handleExecute = async () => {
+        if (currentRisk === 'high') {
+            const confirmed = window.confirm("Security Warning: This code contains destructive operations (DROP, DELETE, etc.). Are you sure you want to execute it?");
+            if (!confirmed) return;
+        }
+
         setIsExecuting(true);
         setError(null);
         try {
-            const data = await executeRawQuery(code, config.language);
-            setResult(data);
-            setViewMode('result');
-            if (onExecute) {
-                onExecute(code, data);
+            const executionResult = await executeCodeSafe(code, config.language);
+            
+            if (executionResult.success) {
+                setResult(executionResult.data || []);
+                setViewMode('result');
+                if (onExecute && executionResult.data) {
+                    onExecute(code, executionResult.data);
+                }
+            } else {
+                throw new Error(executionResult.error);
             }
         } catch (err: any) {
             console.error("Execution failed:", err);
@@ -61,7 +82,6 @@ export const CodeExecutionWidget: React.FC<CodeExecutionWidgetProps> = ({ config
         }));
         
         // We create a temporary config to pass to TableChartComponent
-        // Note: TableChartComponent expects a specific config structure
         return {
             ...config,
             type: 'table' as const,
@@ -71,12 +91,19 @@ export const CodeExecutionWidget: React.FC<CodeExecutionWidgetProps> = ({ config
     };
 
     return (
-        <div className="bg-gray-900 border border-gray-700 rounded-lg overflow-hidden flex flex-col shadow-lg">
+        <div className={`bg-gray-900 border rounded-lg overflow-hidden flex flex-col shadow-lg ${currentRisk === 'high' ? 'border-orange-500/50' : 'border-gray-700'}`}>
             {/* Header / Toolbar */}
-            <div className="flex items-center justify-between px-4 py-2 bg-gray-800 border-b border-gray-700">
-                <div className="flex items-center gap-2">
-                    <span className="text-xs font-mono text-gray-400 uppercase">{config.language}</span>
+            <div className={`flex items-center justify-between px-4 py-2 border-b ${currentRisk === 'high' ? 'bg-orange-900/10 border-orange-500/30' : 'bg-gray-800 border-gray-700'}`}>
+                <div className="flex items-center gap-3">
+                    <span className="text-xs font-mono text-gray-400 uppercase bg-gray-800 px-1.5 py-0.5 rounded border border-gray-600">{config.language}</span>
                     <h3 className="text-sm font-medium text-gray-200">{config.title}</h3>
+                    
+                    {currentRisk === 'high' && (
+                        <div className="flex items-center gap-1 text-orange-400 text-xs font-medium px-2 py-0.5 rounded-full bg-orange-900/20 border border-orange-500/30 animate-pulse">
+                            <ExclamationTriangleIcon className="w-3 h-3" />
+                            <span>High Risk Operation</span>
+                        </div>
+                    )}
                 </div>
                 <div className="flex items-center gap-2">
                    {result && (
@@ -89,11 +116,13 @@ export const CodeExecutionWidget: React.FC<CodeExecutionWidgetProps> = ({ config
                     )}
                     <button
                         onClick={handleExecute}
-                        disabled={isExecuting || (!config.isEditable && !config.autoExecute)}
+                        disabled={isExecuting || (!config.isEditable && !safeAutoExecute)}
                         className={`flex items-center gap-1 px-3 py-1 rounded text-xs font-medium transition-colors ${
                             isExecuting
                                 ? 'bg-gray-700 text-gray-400 cursor-not-allowed'
-                                : 'bg-green-600 hover:bg-green-700 text-white'
+                                : currentRisk === 'high' 
+                                    ? 'bg-orange-600 hover:bg-orange-700 text-white'
+                                    : 'bg-green-600 hover:bg-green-700 text-white'
                         }`}
                     >
                          {isExecuting ? (
@@ -168,4 +197,3 @@ export const CodeExecutionWidget: React.FC<CodeExecutionWidgetProps> = ({ config
 };
 
 export default CodeExecutionWidget;
-

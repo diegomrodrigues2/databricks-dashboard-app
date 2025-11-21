@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import { useChat } from '../../hooks/useChat';
 import MessageBubble from './MessageBubble';
+import { TreeMessage } from '../../types';
 
 const MessageList: React.FC = () => {
   const { messages } = useChat();
@@ -19,10 +20,15 @@ const MessageList: React.FC = () => {
     );
   }
 
+  // Note: For very large trees, we should use react-window. 
+  // Current implementation maps the computed linear thread from useChat.
   return (
     <div className="flex-1 overflow-y-auto p-4 space-y-4">
       {messages.map((message) => (
-        <MessageBubble key={message.id} message={message} />
+        <MessageBubble 
+          key={message.id} 
+          message={message as TreeMessage} 
+        />
       ))}
       <div ref={messagesEndRef} />
     </div>
@@ -30,4 +36,5 @@ const MessageList: React.FC = () => {
 };
 
 export default MessageList;
+
 

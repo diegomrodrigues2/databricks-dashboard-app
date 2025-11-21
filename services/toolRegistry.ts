@@ -18,6 +18,7 @@ export interface ToolDefinition {
     }>;
     required?: string[];
   };
+  requiredPermissions?: string[]; // Added granular permissions support
 }
 
 /**

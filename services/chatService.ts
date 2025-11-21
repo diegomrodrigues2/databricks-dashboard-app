@@ -1,4 +1,4 @@
-import { Message } from '../types';
+import { Message, AgentDefinition, SessionConfig } from '../types';
 import { generateSystemPrompt } from './chat/promptFactory';
 import { fruitSalesDashboardConfig } from './dashboards/fruitSales';
 import { WIDGET_START_TOKEN, WIDGET_END_TOKEN } from '../utils/chatProtocol';
@@ -9,6 +9,8 @@ const DATABRICKS_TOKEN = process.env.DATABRICKS_TOKEN || 'mock-token';
 
 export async function streamChatResponse(
   messages: Message[],
+  agent: AgentDefinition | undefined,
+  sessionConfig: SessionConfig | undefined,
   onChunk: (chunk: string) => void
 ): Promise<void> {
   // Toggle this to switch between mock and real backend
@@ -20,8 +22,8 @@ export async function streamChatResponse(
   }
 
   try {
-    // Generate the system prompt based on the current dashboard configuration
-    const systemPrompt = generateSystemPrompt(fruitSalesDashboardConfig);
+    // Generate the system prompt based on the current dashboard configuration, agent, and session
+    const systemPrompt = generateSystemPrompt(fruitSalesDashboardConfig, agent, sessionConfig);
 
     // Transform internal Message type to API format
     const apiMessages = [
@@ -42,7 +44,7 @@ export async function streamChatResponse(
         messages: apiMessages,
         stream: true, // Critical for token-by-token updates
         max_tokens: 2000,
-        temperature: 0.7
+        temperature: sessionConfig?.modelTemperature || 0.7
       })
     });
 

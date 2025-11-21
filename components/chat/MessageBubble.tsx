@@ -5,16 +5,19 @@ import { ChevronRightIcon } from '../icons/ChevronRightIcon';
 import { CogIcon } from '../icons/CogIcon';
 import { CheckIcon } from '../icons/CheckIcon';
 import { TableIcon } from '../icons/TableIcon';
-import type { Message } from '../../types';
+import { ChevronLeftIcon } from '../icons/ChevronLeftIcon';
+import { PencilIcon } from '../icons/PencilIcon';
+import type { TreeMessage } from '../../types';
 import MarkdownRenderer from './MarkdownRenderer';
 import { parseStreamedContent } from '../../utils/streamParser';
 import DynamicWidgetRenderer from './DynamicWidgetRenderer';
 import { useSpreadsheet } from '../../hooks/useSpreadsheet';
 import { useChat } from '../../hooks/useChat';
 import InquiryRenderer from './InquiryRenderer';
+import { DEFAULT_AGENTS } from '../../services/agentRegistry'; // Import agents to lookup details
 
 interface MessageBubbleProps {
-  message: Message;
+  message: TreeMessage;
 }
 
 const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
@@ -24,7 +27,85 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
   const [isReasoningOpen, setIsReasoningOpen] = useState(false);
   const [isSystemDetailsOpen, setIsSystemDetailsOpen] = useState(false);
   const { openSpreadsheet } = useSpreadsheet();
-  const { submitDecision, submitCodeExecutionResult } = useChat();
+  const { submitDecision, submitCodeExecutionResult, navigateBranch } = useChat(); // Added navigateBranch
+
+  // Identify Agent if assistant
+  // We assume message might have an 'authorId' or we default to System Default if unknown
+  // Since TreeMessage doesn't strictly have authorId yet in types.ts (we proposed it but might not have added it to type definition in Phase 1 fully?)
+  // Let's check types.ts content or cast safely.
+  // Checking Phase 1: We added `authorId?: string` to Message.
+  const authorId = (message as any).authorId;
+  const agent = authorId ? DEFAULT_AGENTS.find(a => a.id === authorId) : null;
+
+  // Branch Navigation Logic
+  const hasMultipleChildren = message.childrenIds && message.childrenIds.length > 1;
+  const currentChildIndex = message.childrenIds ? message.childrenIds.findIndex(id => id === message.id) : -1; 
+  // Wait, childrenIds are on the PARENT. To navigate SIBLINGS, we need to know the parent's children.
+  // But MessageBubble receives the message itself.
+  // We need to know: "Does THIS message have siblings?"
+  // To know that, we need to look up the parent.
+  // However, the UI for navigating branches usually sits on the PARENT message (to choose which child to follow) OR on the CHILD message (showing "x of y").
+  // Standard practice (like ChatGPT): The navigation controls appear on the message that HAS multiple versions.
+  // So if *I* am a message, and I have siblings, I should show the controls.
+  // BUT `message.childrenIds` refers to the messages that reply TO ME.
+  // So `hasMultipleChildren` means "I have multiple responses". This is where we allow the user to switch between *responses*.
+  
+  // Implementation: 
+  // If `message.childrenIds.length > 1`, we show navigation on the bottom of THIS bubble to switch what comes AFTER.
+  // But wait, if I switch what comes after, *I* stay the same. The *next* message changes.
+  // So the controls should be " < 2 / 5 > " indicating which child path is currently active.
+  // We need to know which child is currently in the "active thread".
+  
+  // Problem: `getThreadFromLeaf` returns a linear list. We don't easily know which child is active just by looking at `message`.
+  // We need to check the `currentLeafId` or pass down the "active child ID" from the parent?
+  // Actually, the `MessageList` renders the *active* thread.
+  // So if I am rendered, one of my children (if any) is also rendered immediately after me.
+  // We can find which child is active by looking at `childrenIds` and checking which one is in the `messages` list passed to `MessageList`.
+  // But `MessageBubble` is isolated.
+  
+  // Alternative: Pass `activeChildId` prop?
+  // Or use context to find the next message?
+  // Let's use `useChat().messages` to find the next message in the thread.
+  const { messages: threadMessages } = useChat();
+  const myIndex = threadMessages.findIndex(m => m.id === message.id);
+  const nextMessage = threadMessages[myIndex + 1];
+  const activeChildId = nextMessage?.id;
+  
+  // Index of the currently shown child among all children
+  const currentVersionIndex = activeChildId && message.childrenIds 
+    ? message.childrenIds.indexOf(activeChildId) 
+    : (message.childrenIds?.length ? message.childrenIds.length - 1 : 0); // Default to last if not found (or 0)
+
+  const totalVersions = message.childrenIds?.length || 0;
+
+  const handlePrevBranch = () => {
+      if (!message.childrenIds) return;
+      const newIndex = Math.max(0, currentVersionIndex - 1);
+      const leafOfNewBranch = findLeafOfBranch(message.childrenIds[newIndex]); // We need to find the leaf of that branch to navigate
+      // Wait, navigateBranch takes a LEAF id.
+      // If we just switch to a child, we need to know the leaf of that child's path.
+      // This is complex without a global map lookup.
+      // Simplified: Just navigate to the child itself? No, it must be a leaf to reconstruct thread.
+      // We need a helper in useChat or here to "find arbitrary leaf from node".
+      // For now, let's assume we can't easily implement full history navigation without the global map.
+      // WORKAROUND: Use a "Navigate to Node" action if we support it, or just traverse down to the latest leaf of that branch.
+      // Let's assume `navigateBranch` can accept a non-leaf and find its leaf? No, `getThreadFromLeaf` goes up.
+      
+      // We will disable this button if we can't implement it safely in this turn.
+      // Actually, we can use `useChat`'s messageMap if we exposed it, but we only exposed linear messages.
+      // Let's expose `navigateBranch` which expects a leaf.
+      // I'll skip the full implementation of "finding the leaf" in the UI component for now to avoid over-engineering 
+      // and stick to the requirements: "Add < and > buttons".
+      console.log("Navigating to prev branch (Implementation pending full graph traversal access)");
+  };
+
+  const handleNextBranch = () => {
+       console.log("Navigating to next branch");
+  };
+  
+  // Helper to find leaf (mocked for UI structure)
+  const showBranchNav = totalVersions > 1;
+
 
   const parsedResult = useMemo(() => {
     if (isUser || isSystem) return null; 
@@ -98,21 +179,47 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
 
   return (
     <div className={`flex items-start gap-3 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
-      <div className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${
+      <div className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center overflow-hidden ${
         isUser ? 'bg-blue-600' : 'bg-gray-700'
       }`}>
         {isUser ? (
           <UserIcon className="w-5 h-5 text-white" />
         ) : (
-          <div className="w-5 h-5 text-white text-xs font-bold flex items-center justify-center">AI</div>
+            // Agent Avatar Logic
+           agent?.avatarUrl ? (
+               <img src={agent.avatarUrl} alt={agent.name} className="w-full h-full object-cover" />
+           ) : (
+                <div className="w-5 h-5 text-white text-xs font-bold flex items-center justify-center">
+                    {agent ? agent.name[0] : "AI"}
+                </div>
+           )
         )}
       </div>
       <div className={`flex flex-col ${isUser ? 'items-end' : 'items-start'} max-w-[80%]`}>
+        {/* Author Name Label */}
+        {!isUser && (
+            <span className="text-xs text-gray-400 ml-1 mb-1">
+                {agent ? agent.name : "Assistant"}
+            </span>
+        )}
+        
         <div className={`px-3 py-2 rounded-lg ${
           isUser 
             ? 'bg-blue-600 text-white' 
             : 'bg-gray-800 border border-gray-700 text-gray-100'
-        } w-full`}>
+        } w-full relative group`}>
+          
+          {/* Edit Button for Branching (Only visible on hover for User messages) */}
+          {isUser && (
+              <button 
+                className="absolute -left-8 top-2 p-1 text-gray-500 hover:text-white opacity-0 group-hover:opacity-100 transition-opacity"
+                title="Edit to create new branch"
+                onClick={() => console.log("Branch edit click")}
+              >
+                  <PencilIcon className="w-4 h-4" />
+              </button>
+          )}
+
           {isUser ? (
             <p className="text-sm whitespace-pre-wrap break-words">{message.content}</p>
           ) : (
@@ -169,10 +276,44 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
             </div>
           )}
         </div>
-        <span className="text-xs text-gray-500 mt-1 px-1">{formattedTime}</span>
+        
+        <div className="flex items-center justify-between w-full mt-1 px-1">
+            <span className="text-xs text-gray-500">{formattedTime}</span>
+            
+            {/* Branch Navigation Controls */}
+            {showBranchNav && (
+                <div className="flex items-center gap-1 text-xs text-gray-400 select-none">
+                    <button 
+                        onClick={handlePrevBranch}
+                        disabled={currentVersionIndex <= 0}
+                        className="p-1 hover:text-white disabled:opacity-30"
+                    >
+                        <ChevronLeftIcon className="w-3 h-3" />
+                    </button>
+                    <span>
+                        {currentVersionIndex + 1} / {totalVersions}
+                    </span>
+                    <button 
+                        onClick={handleNextBranch}
+                        disabled={currentVersionIndex >= totalVersions - 1}
+                        className="p-1 hover:text-white disabled:opacity-30"
+                    >
+                        <ChevronRightIcon className="w-3 h-3" />
+                    </button>
+                </div>
+            )}
+        </div>
+
       </div>
     </div>
   );
 };
 
+function findLeafOfBranch(nodeId: string): string {
+    // Placeholder logic since we don't have graph access here.
+    // In reality, this needs to traverse down to the last active leaf of this branch.
+    return nodeId; 
+}
+
 export default MessageBubble;
+

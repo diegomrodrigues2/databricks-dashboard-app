@@ -1,4 +1,4 @@
-import { AppConfig } from '../../types';
+import { AppConfig, AgentDefinition, SessionConfig } from '../../types';
 import { WIDGET_START_TOKEN, WIDGET_END_TOKEN } from '../../utils/chatProtocol';
 import { getAllToolDefinitions } from '../toolRegistry';
 
@@ -120,24 +120,65 @@ ${WIDGET_START_TOKEN}
 ${WIDGET_END_TOKEN}
 `;
 
-export function generateSystemPrompt(appConfig: AppConfig): string {
+export function generateSystemPrompt(
+  appConfig: AppConfig, 
+  agent?: AgentDefinition, 
+  sessionConfig?: SessionConfig
+): string {
   // 1. Extract Data Sources metadata
   const dataSourcesInfo = appConfig.datasources.map(ds => {
     return `- Name: "${ds.name}"\n  Description: ${ds.description}`;
   }).join('\n');
 
-  // 2. Tool Definitions
-  const tools = getAllToolDefinitions();
-  const toolsInfo = tools.map(t => {
+  // 2. Tool Definitions - Filtered by Session Config and Agent Preferences
+  const allTools = getAllToolDefinitions();
+  let enabledTools = allTools;
+
+  if (sessionConfig && sessionConfig.allowedTools) {
+     enabledTools = allTools.filter(t => sessionConfig.allowedTools.includes(t.name));
+  }
+
+  // Also respect agent's default tools if session config is absent (fallback)
+  if (!sessionConfig && agent) {
+      enabledTools = allTools.filter(t => agent.defaultTools.includes(t.name));
+  }
+
+  const toolsInfo = enabledTools.map(t => {
     return `- Tool: "${t.name}"
   Description: ${t.description}
   Parameters: ${JSON.stringify(t.parameters)}
 `;
   }).join('\n');
 
-  // 3. Construct the full prompt
-  return `You are an intelligent data assistant embedded in a dashboard application.
+  // 3. Construct Agent Persona Context
+  let agentPersona = "You are an intelligent data assistant embedded in a dashboard application.";
+  let toneInstruction = "";
+  let reasoningInstruction = "";
+
+  if (agent) {
+      agentPersona = `
+      You are ${agent.name}.
+      Role: ${agent.role}
+      Mission: ${agent.description}
+      
+      ${agent.baseSystemPrompt}
+      `;
+
+      toneInstruction = `Adhere to a ${agent.style.tone} tone.`;
+      
+      if (!agent.style.verboseReasoning) {
+          reasoningInstruction = "Keep your <thought> blocks concise and to the point.";
+      } else {
+          reasoningInstruction = "Elaborate on your reasoning process in <thought> blocks.";
+      }
+  }
+
+  // 4. Construct the full prompt
+  return `${agentPersona}
   
+  ${toneInstruction}
+  ${reasoningInstruction}
+
 You have access to the following data sources:
 ${dataSourcesInfo}
 

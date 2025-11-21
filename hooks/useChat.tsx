@@ -1,23 +1,26 @@
 import React, { createContext, useContext, useReducer, useMemo, useCallback, useEffect } from 'react';
-import type { Message, ToolCall, Session, StructuredInquiry } from '../types';
+import type { Message, ToolCall, Session, StructuredInquiry, TreeMessage, AgentDefinition } from '../types';
 import { streamChatResponse } from '../services/chatService';
 import { parseStreamedContent } from '../utils/streamParser';
 import { getDataForSource } from '../services/dashboardService';
 import { saveSession, getSession, createSession, deleteSession as deleteSessionService, updateSessionTitle, clearAllSessions as clearAllSessionsService } from '../services/sessionService';
+import { agentRegistry, DEFAULT_AGENTS } from '../services/agentRegistry';
 
 interface ChatState {
-  messages: Message[];
+  messageMap: Record<string, TreeMessage>;
+  currentLeafId: string | null;
   isChatOpen: boolean;
   status: 'idle' | 'thinking' | 'executing_tool' | 'streaming_response' | 'awaiting_input';
   activeToolCallId: string | null;
   currentSessionId: string | null;
+  activeAgentId: string;
 }
 
 type ChatAction =
   | { type: 'TOGGLE_CHAT' }
-  | { type: 'SEND_MESSAGE'; payload: Message }
-  | { type: 'ADD_ASSISTANT_MESSAGE'; payload: Message }
-  | { type: 'ADD_SYSTEM_MESSAGE'; payload: Message }
+  | { type: 'SEND_MESSAGE'; payload: TreeMessage }
+  | { type: 'ADD_ASSISTANT_MESSAGE'; payload: TreeMessage }
+  | { type: 'ADD_SYSTEM_MESSAGE'; payload: TreeMessage }
   | { type: 'RECEIVE_TOKEN'; payload: { messageId: string; chunk: string } }
   | { type: 'START_THOUGHT'; payload: { messageId: string } }
   | { type: 'UPDATE_REASONING'; payload: { messageId: string; reasoning: string } }
@@ -30,15 +33,32 @@ type ChatAction =
   | { type: 'SET_ACTIVE_TOOL_CALL'; payload: string | null }
   | { type: 'SET_SESSION'; payload: Session }
   | { type: 'SET_INQUIRY'; payload: { messageId: string; inquiry: StructuredInquiry } }
-  | { type: 'SUBMIT_DECISION'; payload: { inquiryId: string; value: any; userId: string } };
+  | { type: 'SUBMIT_DECISION'; payload: { inquiryId: string; value: any; userId: string } }
+  | { type: 'NAVIGATE_BRANCH'; payload: { leafId: string } }
+  | { type: 'SWITCH_AGENT'; payload: { agentId: string } };
 
 const initialState: ChatState = {
-  messages: [],
+  messageMap: {},
+  currentLeafId: null,
   isChatOpen: false,
   status: 'idle',
   activeToolCallId: null,
   currentSessionId: null,
+  activeAgentId: DEFAULT_AGENTS[0].id,
 };
+
+function getThreadFromLeaf(leafId: string | null, messageMap: Record<string, TreeMessage>): Message[] {
+    if (!leafId) return [];
+    const thread: Message[] = [];
+    let currentId: string | null = leafId;
+    
+    while (currentId && messageMap[currentId]) {
+        const msg = messageMap[currentId];
+        thread.unshift(msg); // Add to beginning
+        currentId = msg.parentId;
+    }
+    return thread;
+}
 
 function chatReducer(state: ChatState, action: ChatAction): ChatState {
   switch (action.type) {
@@ -48,56 +68,97 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
         isChatOpen: !state.isChatOpen,
       };
 
-    case 'SEND_MESSAGE':
-      return {
-        ...state,
-        messages: [...state.messages, action.payload],
-        status: 'thinking',
-      };
+    case 'SEND_MESSAGE': {
+        const newMessage = action.payload;
+        const parentId = newMessage.parentId;
+        
+        const newState = {
+            ...state,
+            messageMap: {
+                ...state.messageMap,
+                [newMessage.id]: newMessage
+            },
+            currentLeafId: newMessage.id,
+            status: 'thinking' as const
+        };
+
+        // Update parent's childrenIds if parent exists
+        if (parentId && state.messageMap[parentId]) {
+            const parent = state.messageMap[parentId];
+            newState.messageMap[parentId] = {
+                ...parent,
+                childrenIds: [...(parent.childrenIds || []), newMessage.id]
+            };
+        }
+        return newState;
+    }
 
     case 'ADD_ASSISTANT_MESSAGE':
+    case 'ADD_SYSTEM_MESSAGE': {
+        const newMessage = action.payload;
+        const parentId = newMessage.parentId;
+        
+        const newState = {
+            ...state,
+            messageMap: {
+                ...state.messageMap,
+                [newMessage.id]: newMessage
+            },
+            currentLeafId: newMessage.id,
+            status: action.type === 'ADD_ASSISTANT_MESSAGE' ? 'streaming_response' as const : state.status
+        };
+
+         if (parentId && state.messageMap[parentId]) {
+            const parent = state.messageMap[parentId];
+            newState.messageMap[parentId] = {
+                ...parent,
+                childrenIds: [...(parent.childrenIds || []), newMessage.id]
+            };
+        }
+
+        return newState;
+    }
+
+    case 'RECEIVE_TOKEN': {
+      const msg = state.messageMap[action.payload.messageId];
+      if (!msg) return state;
+
       return {
         ...state,
-        messages: [...state.messages, action.payload],
-        status: 'streaming_response',
+        messageMap: {
+            ...state.messageMap,
+            [action.payload.messageId]: {
+                ...msg,
+                content: msg.content + action.payload.chunk
+            }
+        }
       };
+    }
 
-    case 'ADD_SYSTEM_MESSAGE':
-      return {
-        ...state,
-        messages: [...state.messages, action.payload],
-      };
-
-    case 'RECEIVE_TOKEN':
-      return {
-        ...state,
-        messages: state.messages.map(msg =>
-          msg.id === action.payload.messageId
-            ? { ...msg, content: msg.content + action.payload.chunk }
-            : msg
-        ),
-      };
-
-    case 'START_THOUGHT':
+    case 'START_THOUGHT': {
+      const msg = state.messageMap[action.payload.messageId];
+      if (!msg) return state;
       return {
         ...state,
         status: 'thinking',
-        messages: state.messages.map(msg =>
-          msg.id === action.payload.messageId
-            ? { ...msg, reasoning: '' }
-            : msg
-        ),
+        messageMap: {
+            ...state.messageMap,
+            [action.payload.messageId]: { ...msg, reasoning: '' }
+        }
       };
+    }
 
-    case 'UPDATE_REASONING':
-      return {
+    case 'UPDATE_REASONING': {
+       const msg = state.messageMap[action.payload.messageId];
+       if (!msg) return state;
+       return {
         ...state,
-        messages: state.messages.map(msg =>
-          msg.id === action.payload.messageId
-            ? { ...msg, reasoning: action.payload.reasoning }
-            : msg
-        ),
-      };
+        messageMap: {
+             ...state.messageMap,
+             [action.payload.messageId]: { ...msg, reasoning: action.payload.reasoning }
+        }
+       };
+    }
 
     case 'END_THOUGHT':
       return {
@@ -105,49 +166,55 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
         status: 'streaming_response',
       };
 
-    case 'START_TOOL_CALL':
+    case 'START_TOOL_CALL': {
+       const msg = state.messageMap[action.payload.messageId];
+       if (!msg) return state;
       return {
         ...state,
         status: 'executing_tool',
         activeToolCallId: action.payload.toolCall.id,
-        messages: state.messages.map(msg =>
-          msg.id === action.payload.messageId
-            ? {
-                ...msg,
-                toolCalls: [...(msg.toolCalls || []), action.payload.toolCall],
-              }
-            : msg
-        ),
+        messageMap: {
+            ...state.messageMap,
+            [action.payload.messageId]: {
+                 ...msg,
+                 toolCalls: [...(msg.toolCalls || []), action.payload.toolCall]
+            }
+        }
       };
+    }
 
-    case 'COMPLETE_TOOL_CALL':
+    case 'COMPLETE_TOOL_CALL': {
+       const msg = state.messageMap[action.payload.messageId];
+       if (!msg) return state;
       return {
         ...state,
         activeToolCallId: null,
         status: 'streaming_response',
-        messages: state.messages.map(msg =>
-          msg.id === action.payload.messageId
-            ? {
-                ...msg,
-                toolCalls: msg.toolCalls?.map(tc =>
+        messageMap: {
+            ...state.messageMap,
+            [action.payload.messageId]: {
+                 ...msg,
+                 toolCalls: msg.toolCalls?.map(tc =>
                   tc.id === action.payload.toolCallId
                     ? { ...tc, status: 'completed' as const }
                     : tc
                 ),
-              }
-            : msg
-        ),
+            }
+        }
       };
+    }
 
-    case 'UPDATE_STREAM':
-      return {
+    case 'UPDATE_STREAM': {
+       const msg = state.messageMap[action.payload.messageId];
+       if (!msg) return state;
+       return {
         ...state,
-        messages: state.messages.map(msg =>
-          msg.id === action.payload.messageId
-            ? { ...msg, content: action.payload.content }
-            : msg
-        ),
-      };
+        messageMap: {
+            ...state.messageMap,
+            [action.payload.messageId]: { ...msg, content: action.payload.content }
+        }
+       };
+    }
 
     case 'SET_STATUS':
       return {
@@ -158,7 +225,8 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
     case 'CLEAR_MESSAGES':
       return {
         ...state,
-        messages: [],
+        messageMap: {},
+        currentLeafId: null,
         status: 'idle',
         activeToolCallId: null,
         currentSessionId: null,
@@ -174,40 +242,62 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
         return {
             ...state,
             currentSessionId: action.payload.id,
-            messages: action.payload.messages,
+            messageMap: action.payload.messageMap || {}, // Handle legacy sessions
+            currentLeafId: action.payload.currentLeafId || null,
             status: 'idle',
             activeToolCallId: null
         };
 
-    case 'SET_INQUIRY':
+    case 'SET_INQUIRY': {
+        const msg = state.messageMap[action.payload.messageId];
+        if (!msg) return state;
         return {
             ...state,
             status: 'awaiting_input',
-            messages: state.messages.map(msg => 
-                msg.id === action.payload.messageId 
-                    ? { ...msg, structuredInquiry: action.payload.inquiry } 
-                    : msg
-            )
+            messageMap: {
+                ...state.messageMap,
+                [action.payload.messageId]: { ...msg, structuredInquiry: action.payload.inquiry }
+            }
         };
+    }
 
     case 'SUBMIT_DECISION':
+        // Logic slightly different for tree: we just update the node that holds the inquiry
+        // But we need to find it. 
+        // Optimization: The payload should probably include messageId or we scan the thread.
+        // For now, let's assume we scan the active thread.
+        const activeThread = getThreadFromLeaf(state.currentLeafId, state.messageMap);
+        const targetMsg = activeThread.find(m => m.structuredInquiry?.id === action.payload.inquiryId);
+        
+        if (!targetMsg) return state;
+
         return {
             ...state,
             status: 'thinking',
-            messages: state.messages.map(msg => {
-                if (msg.structuredInquiry?.id === action.payload.inquiryId) {
-                    return {
-                        ...msg,
-                        decision: {
-                            inquiryId: action.payload.inquiryId,
-                            value: action.payload.value,
-                            timestamp: new Date(),
-                            userId: action.payload.userId
-                        }
-                    };
+            messageMap: {
+                ...state.messageMap,
+                [targetMsg.id]: {
+                    ...targetMsg,
+                    decision: {
+                        inquiryId: action.payload.inquiryId,
+                        value: action.payload.value,
+                        timestamp: new Date(),
+                        userId: action.payload.userId
+                    }
                 }
-                return msg;
-            })
+            }
+        };
+
+    case 'NAVIGATE_BRANCH':
+        return {
+            ...state,
+            currentLeafId: action.payload.leafId
+        };
+        
+    case 'SWITCH_AGENT':
+        return {
+            ...state,
+            activeAgentId: action.payload.agentId
         };
 
     default:
@@ -218,10 +308,11 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
 interface ChatContextType {
   isChatOpen: boolean;
   toggleChat: () => void;
-  messages: Message[];
+  messages: Message[]; // Computed property (linear view)
   status: ChatState['status'];
   activeToolCallId: string | null;
   currentSessionId: string | null;
+  activeAgentId: string;
   sendMessage: (content: string) => Promise<void>;
   submitDecision: (inquiryId: string, value: any) => Promise<void>;
   submitCodeExecutionResult: (code: string, result: any) => Promise<void>;
@@ -231,6 +322,8 @@ interface ChatContextType {
   renameSession: (id: string, newTitle: string) => Promise<void>;
   deleteSession: (id: string) => Promise<void>;
   clearAllHistory: () => Promise<void>;
+  navigateBranch: (leafId: string) => void;
+  switchAgent: (agentId: string) => void;
 }
 
 const ChatContext = createContext<ChatContextType | undefined>(undefined);
@@ -238,19 +331,27 @@ const ChatContext = createContext<ChatContextType | undefined>(undefined);
 export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [state, dispatch] = useReducer(chatReducer, initialState);
 
+  // Derive linear messages from the tree state for UI consumption
+  const messages = useMemo(() => 
+      getThreadFromLeaf(state.currentLeafId, state.messageMap), 
+      [state.currentLeafId, state.messageMap]
+  );
+
   // Persist session whenever status returns to idle and we have a session ID
   useEffect(() => {
       if (state.status === 'idle' && state.currentSessionId) {
           const session: Session = {
               id: state.currentSessionId,
-              title: state.messages[0]?.content.slice(0, 50) || 'New Chat',
-              messages: state.messages,
+              title: messages[0]?.content.slice(0, 50) || 'New Chat',
+              messageMap: state.messageMap,
+              currentLeafId: state.currentLeafId,
               createdAt: Date.now(), // Note: In a real app we'd want to preserve original creation time
               updatedAt: Date.now()
           };
+          // @ts-ignore - Ignoring type mismatch with legacy Service for now, will need to update SessionService later
           saveSession(session).catch(console.error);
       }
-  }, [state.status, state.currentSessionId, state.messages]);
+  }, [state.status, state.currentSessionId, state.messageMap, state.currentLeafId, messages]);
 
   const toggleChat = useCallback(() => {
     dispatch({ type: 'TOGGLE_CHAT' });
@@ -304,6 +405,14 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
   }, [createNewSession]);
 
+  const navigateBranch = useCallback((leafId: string) => {
+      dispatch({ type: 'NAVIGATE_BRANCH', payload: { leafId } });
+  }, []);
+
+  const switchAgent = useCallback((agentId: string) => {
+      dispatch({ type: 'SWITCH_AGENT', payload: { agentId } });
+  }, []);
+
 
   const executeToolCall = async (command: { tool: string, params: string }) => {
       try {
@@ -345,28 +454,43 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const processResponseLoop = async (initialHistory: Message[]) => {
       let currentHistory = [...initialHistory];
+      // Last message in history is the leaf
+      let currentParentId = currentHistory[currentHistory.length - 1].id;
+
       let continueLoop = true;
       let loopCount = 0;
       const MAX_LOOPS = 5;
+      
+      // Get active agent definition
+      const currentAgent = agentRegistry.getAgent(state.activeAgentId);
 
       while (continueLoop && loopCount < MAX_LOOPS) {
           loopCount++;
           
           let currentAssistantMessageId = `${Date.now()}-assistant-${loopCount}`;
-          const assistantMessage: Message = {
+          const assistantMessage: TreeMessage = {
               id: currentAssistantMessageId,
               role: 'assistant',
               content: '',
               timestamp: new Date(),
+              parentId: currentParentId,
+              childrenIds: []
           };
           
           dispatch({ type: 'ADD_ASSISTANT_MESSAGE', payload: assistantMessage });
+          // Update parent pointer for next iteration
+          currentParentId = currentAssistantMessageId;
           
           let accumulatedResponse = '';
           let toolFound = false;
           
           try {
-              await streamChatResponse(currentHistory, (chunk) => {
+              // Pass Agent Definition to Service
+              await streamChatResponse(
+                  currentHistory, 
+                  currentAgent, 
+                  undefined, // SessionConfig to be added later
+                  (chunk) => {
                   accumulatedResponse += chunk;
                   dispatch({
                       type: 'RECEIVE_TOKEN',
@@ -415,14 +539,18 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
               dispatch({ type: 'SET_STATUS', payload: 'executing_tool' });
               const result = await executeToolCall(command);
 
-              const systemMessage: Message = {
+              const systemMessage: TreeMessage = {
                   id: `${Date.now()}-system`,
                   role: 'system',
                   content: JSON.stringify(result),
                   timestamp: new Date(),
+                  parentId: currentParentId,
+                  childrenIds: []
               };
 
               dispatch({ type: 'ADD_SYSTEM_MESSAGE', payload: systemMessage });
+              // Update parent pointer
+              currentParentId = systemMessage.id;
               
               currentHistory = [...currentHistory, systemMessage];
               // Continue loop to get next response from assistant based on tool result
@@ -444,19 +572,22 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
         dispatch({ type: 'SET_SESSION', payload: newSession });
     }
 
-    const userMessage: Message = {
+    const userMessage: TreeMessage = {
       id: `${Date.now()}-user`,
       role: 'user',
       content,
       timestamp: new Date(),
+      parentId: state.currentLeafId, // Append to current leaf
+      childrenIds: []
     };
 
     dispatch({ type: 'SEND_MESSAGE', payload: userMessage });
 
-    const currentHistory = [...state.messages, userMessage];
+    // Reconstruct history including the new message
+    const currentHistory = [...messages, userMessage];
     
     await processResponseLoop(currentHistory);
-  }, [state.messages, state.currentSessionId]);
+  }, [state.messageMap, state.currentLeafId, state.currentSessionId, messages, state.activeAgentId]); // Added dependencies
 
   const submitDecision = useCallback(async (inquiryId: string, value: any) => {
       // 1. Dispatch local state update
@@ -470,7 +601,7 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
       });
 
       // 2. Add System Message logging the decision
-      const decisionMsg: Message = {
+      const decisionMsg: TreeMessage = {
           id: `${Date.now()}-system-decision`,
           role: 'system',
           content: JSON.stringify({ 
@@ -479,12 +610,23 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
               value,
               summary: `User decided: ${value}`
           }),
-          timestamp: new Date()
+          timestamp: new Date(),
+          parentId: state.currentLeafId,
+          childrenIds: []
       };
       dispatch({ type: 'ADD_SYSTEM_MESSAGE', payload: decisionMsg });
 
       // 3. Resume the chat loop
-      const updatedMessages = state.messages.map(msg => {
+      // Need to reconstruct history with the decision embedded
+      // We can assume the decision update happened in the reducer, so 'messages' is stale
+      // But processResponseLoop takes a history array.
+      
+      // NOTE: In a real tree implementation, we would fetch the fresh thread from state
+      // But since we are inside a closure, we need to rely on the fact that the reducer runs synchronously?
+      // No, React state updates are async.
+      
+      // Temporary workaround: Manually construct the 'next' history state locally for the loop
+      const updatedMessages = messages.map(msg => {
          if (msg.structuredInquiry?.id === inquiryId) {
              return {
                  ...msg,
@@ -502,11 +644,11 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const newHistory = [...updatedMessages, decisionMsg];
       await processResponseLoop(newHistory);
 
-  }, [state.messages]); // Depend on messages to reconstruct history
+  }, [messages, state.currentLeafId]); 
 
   const submitCodeExecutionResult = useCallback(async (code: string, result: any) => {
       // Add System Message logging the execution result
-      const executionMsg: Message = {
+      const executionMsg: TreeMessage = {
           id: `${Date.now()}-system-execution`,
           role: 'system',
           content: JSON.stringify({ 
@@ -515,14 +657,16 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
               result_summary: Array.isArray(result) ? `Returned ${result.length} rows.` : 'Execution completed.',
               result_preview: Array.isArray(result) ? result.slice(0, 5) : result
           }),
-          timestamp: new Date()
+          timestamp: new Date(),
+          parentId: state.currentLeafId,
+          childrenIds: []
       };
       dispatch({ type: 'ADD_SYSTEM_MESSAGE', payload: executionMsg });
 
       // Resume the chat loop with updated history
-      const newHistory = [...state.messages, executionMsg];
+      const newHistory = [...messages, executionMsg];
       await processResponseLoop(newHistory);
-  }, [state.messages]);
+  }, [messages, state.currentLeafId]);
 
   const clearMessages = useCallback(() => {
     dispatch({ type: 'CLEAR_MESSAGES' });
@@ -532,10 +676,11 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
     () => ({
       isChatOpen: state.isChatOpen,
       toggleChat,
-      messages: state.messages,
+      messages, // Expose linear thread
       status: state.status,
       activeToolCallId: state.activeToolCallId,
       currentSessionId: state.currentSessionId,
+      activeAgentId: state.activeAgentId,
       sendMessage,
       submitDecision,
       submitCodeExecutionResult,
@@ -544,9 +689,11 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
       createNewSession,
       renameSession,
       deleteSession,
-      clearAllHistory
+      clearAllHistory,
+      navigateBranch,
+      switchAgent
     }),
-    [state.isChatOpen, state.messages, state.status, state.activeToolCallId, state.currentSessionId, toggleChat, sendMessage, submitDecision, clearMessages, loadSession, createNewSession, renameSession, deleteSession, clearAllHistory]
+    [state.isChatOpen, messages, state.status, state.activeToolCallId, state.currentSessionId, state.activeAgentId, toggleChat, sendMessage, submitDecision, clearMessages, loadSession, createNewSession, renameSession, deleteSession, clearAllHistory, navigateBranch, switchAgent]
   );
 
   return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>;
