@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import DashboardGrid from '../components/DashboardGrid';
+import { DashboardBuilder } from '../components/builder/DashboardBuilder';
 import KPIComponent from '../components/charts/KPIComponent';
 import BarChartComponent from '../components/charts/BarChartComponent';
 import GroupedBarChartComponent from '../components/charts/GroupedBarChartComponent';
@@ -26,12 +27,17 @@ import MarkdownComponent from '../components/charts/MarkdownComponent';
 import BoxPlotChartComponent from '../components/charts/BoxPlotChartComponent';
 import CandlestickChartComponent from '../components/charts/CandlestickChartComponent';
 import FormComponent from '../components/charts/FormComponent';
+import CodeExecutionWidget from '../components/widgets/CodeExecutionWidget';
 import DashboardFilters from '../components/DashboardFilters';
-import { getDashboardConfig, getDataForSource } from '../services/dashboardService';
+import { getDashboardConfig, getDataForSource, updateDashboardLayout } from '../services/dashboardService';
 import type { AppConfig, WidgetConfig, DashboardFilterConfig } from '../types';
 import DataSourceSelector from '../components/DataSourceSelector';
 import { ExclamationTriangleIcon } from '../components/icons/ExclamationTriangleIcon';
+import { PencilIcon } from '../components/icons/PencilIcon';
+import { CheckIcon } from '../components/icons/CheckIcon';
+import { XIcon } from '../components/icons/XIcon';
 import { useSpreadsheet } from '../hooks/useSpreadsheet';
+import { Layout } from 'react-grid-layout';
 
 const applyWidgetFilters = (data: any[], filters: WidgetConfig['filters']) => {
     if (!filters || filters.length === 0) {
@@ -127,6 +133,11 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ dashboardId }) => {
     const [activeFilters, setActiveFilters] = useState<{ [key: string]: any }>({});
     const { openSpreadsheet } = useSpreadsheet();
 
+    // Builder State
+    const [isEditMode, setIsEditMode] = useState(false);
+    const [localWidgets, setLocalWidgets] = useState<WidgetConfig[]>([]);
+    const [editingWidgetId, setEditingWidgetId] = useState<string | null>(null);
+
     useEffect(() => {
         const fetchData = async () => {
             setLoading(true);
@@ -134,9 +145,11 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ dashboardId }) => {
             setConfig(null);
             setData({});
             setActiveFilters({});
+            setIsEditMode(false); // Reset edit mode on dashboard change
             try {
                 const dashboardConfig = await getDashboardConfig(dashboardId);
                 setConfig(dashboardConfig);
+                setLocalWidgets(dashboardConfig.dashboard.widgets); // Initialize local widgets
 
                 const requiredSources = [...new Set(dashboardConfig.dashboard.widgets.map(w => w.dataSource))];
                 if (dashboardConfig.dashboard.filters) {
@@ -234,66 +247,94 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ dashboardId }) => {
         }
     };
 
-    if (loading) {
-        return (
-            <div className="h-full flex flex-col justify-center items-center">
-                <p className="text-gray-400">Loading Dashboard...</p>
-            </div>
-        );
-    }
+    // --- Builder Handlers ---
 
-    if (error) {
-        return (
-            <div className="h-full flex flex-col justify-center items-center bg-red-900/20 border border-red-500/50 rounded-lg p-8 text-center">
-                <ExclamationTriangleIcon className="w-16 h-16 text-red-500 mb-4" />
-                <h2 className="text-2xl font-bold text-red-400 mb-2">Error Loading Dashboard</h2>
-                <p className="text-red-300 max-w-md">{error}</p>
-            </div>
-        );
+    const handleEditToggle = () => {
+        if (isEditMode) {
+            // Cancel action
+            setIsEditMode(false);
+            setEditingWidgetId(null);
+            setLocalWidgets(config?.dashboard.widgets || []);
+        } else {
+            // Enter edit mode
+            setIsEditMode(true);
+            setEditingWidgetId(null);
+            setLocalWidgets(JSON.parse(JSON.stringify(config?.dashboard.widgets || [])));
     }
-    
-    if (!config) {
-        return (
-            <div className="h-full flex flex-col justify-center items-center">
-                <p className="text-red-400">Failed to load dashboard configuration.</p>
-            </div>
-        );
+    };
+
+    const handleSave = async () => {
+        if (!config) return;
+        try {
+            setLoading(true);
+            await updateDashboardLayout(dashboardId, localWidgets);
+            
+            // Update local config state to reflect changes without full reload
+            setConfig(prev => prev ? {
+                ...prev,
+                dashboard: {
+                    ...prev.dashboard,
+                    widgets: localWidgets
+                }
+            } : null);
+            
+            setIsEditMode(false);
+            setEditingWidgetId(null);
+        } catch (err) {
+            console.error("Failed to save dashboard layout", err);
+            alert("Failed to save dashboard layout.");
+        } finally {
+            setLoading(false);
     }
+    };
 
-    const hasFilters = config.dashboard.filters && config.dashboard.filters.length > 0;
-    const hasDataSources = config.datasources && config.datasources.length > 0;
+    const handleCancel = () => {
+        setIsEditMode(false);
+        setEditingWidgetId(null);
+        setLocalWidgets(config?.dashboard.widgets || []);
+    };
 
-    return (
-        <div className="h-full flex flex-col">
-            {(hasFilters || hasDataSources) && (
-                <div className="mb-6 flex flex-wrap gap-4 justify-between items-start">
-                    <div>
-                        {hasFilters && (
-                            <DashboardFilters
-                                config={config.dashboard.filters!}
-                                data={data}
-                                activeFilters={activeFilters}
-                                onFilterChange={setActiveFilters}
-                                onClearAllFilters={handleClearFilters}
-                            />
-                        )}
-                    </div>
-                    <div>
-                        {hasDataSources && (
-                            <DataSourceSelector 
-                                dataSources={config.datasources}
-                                onSelect={handleDataSourceSelect}
-                            />
-                        )}
-                    </div>
-                </div>
-            )}
-            <h1 className="text-2xl font-semibold text-gray-100 mb-4">{config.dashboard.title}</h1>
-            <div className="flex-grow min-h-0">
-                <DashboardGrid>
-                    {config.dashboard.widgets.map((widget) => {
+    const handleLayoutChange = useCallback((newLayout: Layout[]) => {
+        setLocalWidgets(prevWidgets => {
+            const widgetMap = new Map(prevWidgets.map(w => [w.id, w]));
+            
+            newLayout.forEach(l => {
+                const widget = widgetMap.get(l.i);
+                if (widget) {
+                    widget.layout = {
+                        i: l.i,
+                        x: l.x,
+                        y: l.y,
+                        w: l.w,
+                        h: l.h
+                    };
+                }
+            });
+            
+            return Array.from(widgetMap.values());
+        });
+    }, []);
+
+    const handleWidgetRemove = (id: string) => {
+        setLocalWidgets(prev => prev.filter(w => w.id !== id));
+    };
+
+    const handleWidgetEdit = (id: string) => {
+        setEditingWidgetId(id);
+    };
+
+    const handleWidgetConfigSave = (id: string, updatedConfig: WidgetConfig) => {
+        setLocalWidgets(prev => prev.map(w => w.id === id ? updatedConfig : w));
+        setEditingWidgetId(null);
+    };
+
+    const handleWidgetConfigCancel = () => {
+        setEditingWidgetId(null);
+    };
+
+    const renderWidget = (widget: WidgetConfig) => {
                         const widgetData = data[widget.dataSource] || [];
-                        const dashboardFilteredData = applyDashboardFilters(widgetData, activeFilters, config.dashboard.filters);
+        const dashboardFilteredData = applyDashboardFilters(widgetData, activeFilters, config?.dashboard.filters);
                         const filteredData = applyWidgetFilters(dashboardFilteredData, widget.filters);
                         const seeDataHandler = () => handleSeeData(widget.title, filteredData, widget.dataSource);
                         
@@ -375,9 +416,128 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ dashboardId }) => {
                         if (widget.type === 'form') {
                             return <FormComponent key={widget.id} config={widget} />;
                         }
+        if (widget.type === 'code-executor') {
+             return <CodeExecutionWidget key={widget.id} config={widget} onExecute={() => {}} />;
+        }
                         return null;
-                    })}
+    };
+
+    if (loading && !config) {
+        return (
+            <div className="h-full flex flex-col justify-center items-center">
+                <p className="text-gray-400">Loading Dashboard...</p>
+            </div>
+        );
+    }
+
+    if (error) {
+        return (
+            <div className="h-full flex flex-col justify-center items-center bg-red-900/20 border border-red-500/50 rounded-lg p-8 text-center">
+                <ExclamationTriangleIcon className="w-16 h-16 text-red-500 mb-4" />
+                <h2 className="text-2xl font-bold text-red-400 mb-2">Error Loading Dashboard</h2>
+                <p className="text-red-300 max-w-md">{error}</p>
+            </div>
+        );
+    }
+    
+    if (!config) {
+        return (
+            <div className="h-full flex flex-col justify-center items-center">
+                <p className="text-red-400">Failed to load dashboard configuration.</p>
+            </div>
+        );
+    }
+
+    const hasFilters = config.dashboard.filters && config.dashboard.filters.length > 0;
+    const hasDataSources = config.datasources && config.datasources.length > 0;
+
+    // Determine if we should show the legacy Grid or the new Builder
+    // Backward compatibility: If ANY widget has layout data, use Builder in View Mode.
+    // If we are in Edit Mode, always use Builder.
+    const hasLayoutData = config.dashboard.widgets.some(w => w.layout !== undefined);
+    const shouldUseBuilder = isEditMode || hasLayoutData;
+
+    return (
+        <div className="flex flex-col">
+            <div className="mb-6 flex flex-wrap gap-4 justify-between items-center">
+                {/* Left side: Filters & Data Sources */}
+                <div className="flex gap-4 flex-wrap items-start flex-grow">
+                    {(hasFilters || hasDataSources) && (
+                        <>
+                            <div>
+                                {hasFilters && (
+                                    <DashboardFilters
+                                        config={config.dashboard.filters!}
+                                        data={data}
+                                        activeFilters={activeFilters}
+                                        onFilterChange={setActiveFilters}
+                                        onClearAllFilters={handleClearFilters}
+                                    />
+                                )}
+                            </div>
+                            <div>
+                                {hasDataSources && (
+                                    <DataSourceSelector 
+                                        dataSources={config.datasources}
+                                        onSelect={handleDataSourceSelect}
+                                    />
+                                )}
+                            </div>
+                        </>
+                    )}
+                </div>
+
+                {/* Right side: Edit Controls */}
+                <div className="flex items-center gap-2">
+                    {isEditMode ? (
+                        <>
+                             <button 
+                                onClick={handleSave}
+                                className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-md transition-colors"
+                            >
+                                <CheckIcon className="w-4 h-4" />
+                                <span>Save</span>
+                            </button>
+                            <button 
+                                onClick={handleCancel}
+                                className="flex items-center gap-2 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-md transition-colors"
+                            >
+                                <XIcon className="w-4 h-4" />
+                                <span>Cancel</span>
+                            </button>
+                        </>
+                    ) : (
+                        <button 
+                            onClick={handleEditToggle}
+                            className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-md transition-colors"
+                        >
+                            <PencilIcon className="w-4 h-4" />
+                            <span>Edit Layout</span>
+                        </button>
+                    )}
+                </div>
+            </div>
+
+            <h1 className="text-2xl font-semibold text-gray-100 mb-4">{config.dashboard.title}</h1>
+            
+            <div>
+                {shouldUseBuilder ? (
+                    <DashboardBuilder 
+                        widgets={localWidgets}
+                        isEditMode={isEditMode}
+                        editingWidgetId={editingWidgetId}
+                        onLayoutChange={handleLayoutChange}
+                        renderWidget={renderWidget}
+                        onWidgetRemove={handleWidgetRemove}
+                        onWidgetEdit={handleWidgetEdit}
+                        onWidgetConfigSave={handleWidgetConfigSave}
+                        onWidgetConfigCancel={handleWidgetConfigCancel}
+                    />
+                ) : (
+                    <DashboardGrid>
+                        {config.dashboard.widgets.map((widget) => renderWidget(widget))}
                 </DashboardGrid>
+                )}
             </div>
         </div>
     );

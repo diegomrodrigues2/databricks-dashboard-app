@@ -53,6 +53,13 @@ interface BaseWidgetConfig {
     description: string;
     gridWidth?: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12;
     gridHeight?: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12;
+    layout?: {
+        i: string;
+        x: number;
+        y: number;
+        w: number;
+        h: number;
+    };
 }
 
 export interface KPIWidgetConfig extends BaseWidgetConfig {

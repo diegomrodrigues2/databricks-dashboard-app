@@ -1,34 +1,12 @@
 {
-  "name": "ciandt-smart-dashboard",
-  "private": true,
-  "version": "0.0.0",
-  "type": "module",
+  "name": "databricks-dashboard-app",
+  "version": "1.0.0",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview"
-  },
-  "dependencies": {
-    "d3-array": "^3.2.4",
-    "d3-dsv": "^3.0.1",
-    "d3-scale": "^4.0.2",
-    "d3-scale-chromatic": "3.1.0",
-    "d3-shape": "^3.2.0",
-    "d3-time": "^3.1.0",
-    "html-to-image": "^1.11.11",
-    "marked": "^12.0.2",
-    "prismjs": "^1.30.0",
-    "react": "^19.1.1",
-    "react-dom": "^19.1.1",
-    "react-simple-code-editor": "^0.14.1",
-    "react-window": "^1.8.10",
-    "xlsx": "^0.18.5"
+    "dev": "concurrently \"cd backend && python3 -m uvicorn app.main:app --reload --port 8000\" \"cd frontend && npm run dev\"",
+    "build": "cd frontend && npm install && npm run build && rm -rf ../backend/static && mv dist ../backend/static"
   },
   "devDependencies": {
-    "@types/node": "^22.14.0",
-    "@types/prismjs": "^1.26.5",
-    "@vitejs/plugin-react": "^5.0.0",
-    "typescript": "~5.8.2",
-    "vite": "^6.2.0"
+    "concurrently": "^8.2.2"
   }
 }
+

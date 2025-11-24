@@ -1,0 +1,39 @@
+{
+  "name": "ciandt-smart-dashboard",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "d3-array": "^3.2.4",
+    "d3-dsv": "^3.0.1",
+    "d3-scale": "^4.0.2",
+    "d3-scale-chromatic": "3.1.0",
+    "d3-shape": "^3.2.0",
+    "d3-time": "^3.1.0",
+    "html-to-image": "^1.11.11",
+    "lodash": "^4.17.21",
+    "marked": "^12.0.2",
+    "prismjs": "^1.30.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "react-grid-layout": "^1.5.2",
+    "react-resizable": "^3.0.5",
+    "react-simple-code-editor": "^0.14.1",
+    "react-window": "^1.8.10",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@types/lodash": "^4.17.20",
+    "@types/node": "^22.14.0",
+    "@types/prismjs": "^1.26.5",
+    "@types/react-grid-layout": "^1.3.6",
+    "@vitejs/plugin-react": "^5.0.0",
+    "typescript": "~5.8.2",
+    "vite": "^6.2.0"
+  }
+}

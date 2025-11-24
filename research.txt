@@ -1,547 +1,473 @@
+A arquitetura proposta é a de um aplicativo full-stack unificado, seguindo o padrão Backend-for-Frontend (BFF). Isso significa que o front-end React (construído com Vite) e o back-end FastAPI serão implantados juntos como um único serviço. O diagrama conceitual é:
 
-Arquitetura de Orquestração Multi-Agente e Gerenciamento de Estado Não-Linear em Interfaces React para GenAI
+Frontend (React + Vite): Interface do usuário que roda no navegador. Ele se comunica apenas com o backend FastAPI para qualquer dado ou ação do Databricks. O bundle estático do React será servido pelo próprio FastAPI em produção (evitando a necessidade de servidores separados).
 
+Backend (FastAPI): Camada intermediária que expõe uma API REST (por exemplo, rota base /api/...). O FastAPI realiza as operações no Databricks em nome do front-end, incluindo: execução de queries SQL, leitura/escrita de arquivos no DBFS e chamada de modelos/LLM no Databricks. Nenhum token ou credencial sensível é exposto ou armazenado no front-end, ficando restrito ao servidor. O FastAPI se integra com as APIs REST do Databricks utilizando o token de acesso (mantido seguro no backend).
 
-1. Sumário Executivo e Tese Arquitetural
+Databricks Services: O Databricks passa a ser consumido via APIs REST seguras. O backend chama as APIs de SQL Warehouse para executar consultas e obter resultados, e as APIs de DBFS para manipulação de arquivos, além de eventualmente chamar endpoints de model serving ou OpenAI para LLMs, conforme necessário.
 
-A evolução das interfaces de conversação baseadas em Grandes Modelos de Linguagem (LLMs) está transitando de um paradigma de chat linear e reativo para arquiteturas cognitivas complexas, caracterizadas pela orquestração multi-agente, persistência de estado ramificada e integração profunda com ferramentas de execução de código. O presente relatório técnico delineia uma estratégia exaustiva para transformar a aplicação existente — identificada nos artefatos do projeto como diegomrodrigues2-databricks-dashboard-app — de um visualizador de dashboards passivo com overlay de chat em um Ambiente de Desenvolvimento Integrado Generativo (GenIDE) completo.1
-A análise da base de código atual revela uma fundação sólida construída sobre React 19, TypeScript e Vite, utilizando Tailwind CSS para estilização e IndexedDB para persistência local via sessionService.ts.1 A aplicação já implementa conceitos avançados de "Generative UI" (GenUI) através do DynamicWidgetRenderer.tsx e de um parser de streaming robusto em streamParser.ts capaz de diferenciar raciocínio (<thought>), comandos de ferramentas (<command>) e configurações de widgets (<widget>).1 Contudo, o modelo de estado atual, encapsulado no hook useChat.tsx, opera sob uma premissa linear estrita, onde cada mensagem possui um único sucessor e o "Assistente" é uma entidade monolítica definida por um prompt de sistema estático gerado em promptFactory.ts.1
-Para atender aos quatro requisitos estratégicos solicitados — (1) Seleção pré-sessão de modos e ferramentas, (2) Criação e customização de agentes, (3) Alternância dinâmica de agentes (Hot-Swapping) e (4) Ramificação conversacional (Branching) — é imperativo realizar uma refatoração estrutural profunda. A tese central deste relatório é que a aplicação deve abandonar a estrutura de dados de array linear para o histórico de mensagens em favor de um Grafo Acíclico Dirigido (DAG) normalizado. Adicionalmente, o conceito de "Sistema" deve ser abstraído para permitir a injeção dinâmica de AgentDefinitions em tempo de execução, transformando o frontend em um orquestrador agnóstico que gerencia o contexto e a renderização para múltiplos atores cognitivos.
-Este documento detalha a implementação dessas mudanças, abordando desde a redefinição das interfaces TypeScript em types.ts até a lógica de renderização virtualizada necessária para suportar árvores de conversação complexas, garantindo que a integridade dos dados e a performance da aplicação sejam mantidas ou aprimoradas.
+Essa arquitetura garante que o aplicativo possa ser executado como um único serviço no Databricks (por ex., como um Databricks App ou em um cluster dedicado). O FastAPI pode servir os arquivos estáticos do React (gerados pelo build do Vite) e também expor as rotas de API sob o mesmo host. Assim, ao fazer o deploy, basta iniciar o servidor FastAPI – ele servirá tanto a interface (HTML/JS/CSS) quanto as APIs usadas pelo app.
 
-2. Desconstrução da Arquitetura Base e Diagnóstico Técnico
+Fluxo de operação típico: O usuário interage com o React; por exemplo, clica para rodar uma query SQL ou abrir um arquivo. O front-end então faz uma requisição fetch (HTTP) para uma rota do FastAPI (/api/...). O FastAPI recebe essa requisição, faz a chamada apropriada para o Databricks (usando o token de autenticação) – seja para executar uma query no warehouse via REST API
+docs.pinkfish.ai
+, ou ler/escrever um arquivo no DBFS – e devolve a resposta processada de volta ao front-end em formato JSON (ou streaming, se for o caso de respostas LLM). Dessa forma, o front-end nunca se comunica diretamente com Databricks; toda interação é mediada e controlada pelo backend (melhorando a segurança e flexibilidade).
 
-Antes de propor a arquitetura de destino, é crucial realizar uma autópsia técnica da implementação vigente para identificar os pontos de acoplamento e as limitações que impedem a implementação imediata dos novos recursos. A base de código fornecida demonstra um nível de maturidade elevado, mas otimizado para um fluxo de trabalho específico que estamos prestes a romper.
+Organização de Arquivos (Front-end e Back-end)
 
-2.1 O Monólito de Estado: Análise do useChat.tsx
+Para manter o projeto organizado, podemos estruturar os arquivos em diretórios separados para front e back. Por exemplo:
 
-O núcleo lógico da aplicação reside no hook customizado hooks/useChat.tsx. Atualmente, o estado da aplicação é definido pela interface ChatState, que mantém um array linear de mensagens:
+databricks-dashboard-app/
+├── frontend/
+│   ├── index.html
+│   ├── vite.config.ts
+│   ├── package.json
+│   └── src/
+│       ├── App.tsx, index.tsx (ponto de entrada React)
+│       ├── components/ (componentes React)
+│       ├── services/ (lógica de comunicação c/ backend: ex. chatService.ts, dashboardService.ts adaptados)
+│       └── ... (outros arquivos do front-end)
+├── backend/
+│   ├── main.py (inicialização do FastAPI e montagem de rotas)
+│   ├── requirements.txt (FastAPI, Uvicorn, requests, etc.)
+│   ├── app/
+│   │   ├── api/
+│   │   │   ├── routes_sql.py (endpoints para queries SQL)
+│   │   │   ├── routes_files.py (endpoints para arquivos DBFS)
+│   │   │   └── routes_chat.py (endpoints para chat/LLM, se aplicável)
+│   │   ├── core/
+│   │   │   ├── databricks_client.py (funções utilitárias p/ chamar APIs do Databricks)
+│   │   │   └── config.py (configurações, ex: carregar tokens/hosts de env)
+│   │   └── ... (outros módulos do backend)
+│   └── .env (opcional: variáveis de ambiente para dev, **não commitar**)
+├── .env.example (modelo de .env mostrando variáveis necessárias, sem valores)
+├── docker-compose.yml (opcional: para facilitar execução local)
+└── README.md (instruções de execução e deploy)
 
-TypeScript
 
+Detalhes dessa organização:
 
-interface ChatState {
-  messages: Message;
-  isChatOpen: boolean;
-  status: 'idle' | 'thinking' | 'executing_tool' | 'streaming_response' | 'awaiting_input';
-  activeToolCallId: string | null;
-  currentSessionId: string | null;
-}
+O front-end permanece majoritariamente igual, com todos os componentes React e lógica de UI. A diferença será que serviços como dashboardService.ts e chatService.ts serão ajustados para chamar o backend em vez de acessar diretamente a API do Databricks. Por exemplo, getDataForSource que antes talvez retornava dados mock ou chamava diretamente um endpoint externo, agora fará um fetch para o FastAPI (ex: fetch('/api/query?source=...')). Manteremos as pastas de componentes, hooks, etc., conforme o código atual, mas removeremos quaisquer referências diretas a tokens ou endpoints do Databricks.
 
+O back-end FastAPI terá suas rotas agrupadas (como exemplificado em routes_sql.py, routes_files.py, etc.), ou pode ser implementado tudo em um único main.py simples se preferir. Na inicialização (main.py), montaremos o app React estático: após rodar o build do Vite, os arquivos ficam em frontend/dist (por exemplo), então podemos usar FastAPI() + Starlette StaticFiles para servir frontend/dist na raiz /. Exemplo:
 
-A análise deste estado revela bloqueios fundamentais para os requisitos solicitados:
-Linearidade Forçada: A propriedade messages: Message implica que a mensagem no índice $n$ é sempre a resposta à mensagem no índice $n-1$ (ou uma continuação do sistema). Isso torna impossível o Branching (Requisito 4), onde uma mensagem no índice $n$ poderia ter múltiplos sucessores alternativos baseados em diferentes escolhas do usuário ou regenerações de resposta.1
-Estado Global de Execução: O campo status é global para a sessão. Em um cenário multi-agente (Requisito 3), onde o Agente A pode estar "pensando" enquanto o Agente B aguarda, ou onde o usuário deseja interagir com um ramo anterior da conversa enquanto o atual processa uma query longa no Databricks, um único status global é insuficiente.
-Acoplamento de Sessão: A dependência direta de currentSessionId com um array simples dificulta a navegação entre "versões" da mesma conversa sem recarregar todo o contexto do sessionService.ts.1
+app = FastAPI()
+app.mount("/", StaticFiles(directory="../frontend/dist", html=True), name="frontend")
 
-2.2 A Fábrica de Prompts Estática: promptFactory.ts
 
-A geração das instruções para o LLM é controlada por services/chat/promptFactory.ts. A função generateSystemPrompt consome a configuração global da aplicação (AppConfig) e constrói um prompt de sistema único e massivo.1
+Assim, requisições normais servem o index.html e assets, enquanto requisições que começam com /api/ caem nas rotas do FastAPI.
 
-TypeScript
+Arquivos de configuração: o backend terá um módulo (ex: config.py) para carregar configurações (host do Databricks, token, etc.) via os.getenv ou usando libs como python-dotenv ou Pydantic Settings. Isso facilita ler do .env em dev ou das variáveis de ambiente injetadas no deploy (discutido adiante).
 
+Incluímos opcionalmente um Docker Compose para desenvolvimento (discutido mais abaixo), e no README podemos documentar como rodar e como configurar credenciais.
 
-export function generateSystemPrompt(appConfig: AppConfig): string {
-  //... extração de metadados de ferramentas...
-  return `You are an intelligent data assistant...
-  You have access to the following tools: ${toolsInfo}
- ...`;
-}
+Essa separação torna o desenvolvimento organizado (front e back desacoplados internamente) e, ao mesmo tempo, permite build e deploy unificados. No deploy final como Databricks App, pode-se criar um contêiner Docker que instale as dependências do backend, copie o build estático do front para dentro e rode o Uvicorn (FastAPI) servindo tudo.
 
+Endpoints FastAPI – Consultas SQL no Warehouse Databricks
 
-Este design viola o Requisito 2 (Criação de Agentes Diferentes). O código atual assume uma identidade singular ("intelligent data assistant"). Para suportar múltiplos agentes, esta lógica precisa ser invertida: o sistema não deve ditar o prompt com base na configuração do app, mas sim aceitar uma AgentDefinition que traga suas próprias diretrizes, tom de voz e restrições de ferramentas. A promptFactory deve se tornar uma função pura que compila o prompt final combinando o contexto do agente com o contexto da sessão, e não uma constante global.
+Para consultar SQL Warehouses no Databricks via API, utilizaremos o Databricks SQL Statement Execution API 2.0
+docs.pinkfish.ai
+. Esse endpoint REST nos permite enviar um comando SQL e obter resultados, dado o warehouse_id (ID do Warehouse SQL onde a query será executada). Em alto nível, o FastAPI receberá do front a string da query (e possivelmente o ID do warehouse ou nome do data source) e então fará uma requisição HTTP POST para o endpoint do Databricks.
 
-2.3 O Parser Léxico de Streaming: streamParser.ts
+Requisitos: precisamos do host do workspace Databricks (por ex: https://<workspace-url>) e um token de acesso válido, configurados no backend. Também precisaremos do Warehouse ID. Podemos gerenciar isso assim:
 
-Um dos ativos mais valiosos da base de código atual é o utils/streamParser.ts. Diferente de implementações ingênuas que esperam a resposta completa, este parser atua como um tokenizador léxico em tempo real, capaz de identificar e segregar blocos de conteúdo misto.1
-A função parseStreamedContent escaneia o buffer de entrada em busca de tokens delimitadores específicos:
-<thought>...</thought>: Para Cadeia de Pensamento (CoT).
-<command tool="...">...</command>: Para chamadas de função RPC.
-WIDGET_START_TOKEN / WIDGET_END_TOKEN: Para injeção de JSON de configuração de UI.
-Blocos Markdown padrão.
-A robustez deste parser, evidenciada pelo seu loop de processamento (while (cursor < length)), é fundamental para a estabilidade do sistema. No entanto, para suportar a troca de agentes, o parser pode precisar evoluir para suportar "namespaces" ou formatos de saída variáveis, caso diferentes agentes (ex: um modelo Python especializado vs. um modelo SQL) utilizem convenções de saída ligeiramente diferentes. Além disso, o parser atual não parece manter estado entre chunks de mensagens quebradas, o que pode ser um ponto de falha se a ramificação da conversa ocorrer exatamente no meio de um token de controle.
+O Warehouse ID pode ser enviado pelo front-end em cada chamada (por ex, parte do body JSON) ou configurado por padrão no backend (ex: uma variável de ambiente DATABRICKS_WAREHOUSE_ID default). Na prática, é recomendável permitir que o front especifique qual warehouse usar (caso haja múltiplos), mas ter um padrão caso não venha nada.
 
-2.4 Renderização Dinâmica e Ecossistema de Widgets
+O host e token ficam seguros no servidor (ver seção de Credenciais).
 
-O arquivo components/chat/DynamicWidgetRenderer.tsx atua como o dispatcher central para a Generative UI. Ele mapeia a configuração JSON recebida para componentes React concretos, como BarChartComponent, CodeExecutionWidget, ou TableChartComponent.1
-Uma análise detalhada do components/charts/ revela uma biblioteca rica baseada em D3.js (d3-scale, d3-shape, d3-array) e componentes SVG puros, em vez de depender de bibliotecas de gráficos de alto nível pesadas como Recharts ou Chart.js.1
-Implicação de Performance: O uso de D3 de baixo nível é excelente para performance, permitindo granulação fina na renderização.
-Implicação para Ramificação: O DynamicWidgetRenderer atual dispara um efeito colateral (useEffect) para buscar dados (getDataForSource) assim que é montado.1 Em uma arquitetura de ramificação, onde o usuário pode alternar rapidamente entre diferentes "versões" de uma resposta, isso causará requisições de rede redundantes e "flickering" visual. A arquitetura futura precisará implementar um cache de dados no nível da sessão ou do componente para evitar re-buscas desnecessárias ao navegar pelo histórico da árvore de conversa.
+Exemplo de endpoint FastAPI para executar uma query SQL:
 
-2.5 Execução de Código e Segurança
+import os, requests
+from fastapi import APIRouter, HTTPException
 
-O componente CodeExecutionWidget.tsx permite a edição e execução de SQL e Python. Atualmente, ele invoca executeRawQuery em dashboardService.ts.1
-Risco Crítico de Segurança: O arquivo vite.config.ts expõe process.env.DATABRICKS_TOKEN via a propriedade define.1 Isso injeta o token de autenticação diretamente no bundle JavaScript do cliente. Em uma arquitetura onde agentes podem ser criados e customizados pelo usuário, isso amplia a superfície de ataque. A nova arquitetura deve obrigatoriamente mover a execução de código para um proxy Backend-for-Frontend (BFF) para ocultar credenciais e sanitizar inputs, especialmente quando permitimos que agentes gerem SQL arbitrário.
+router = APIRouter()
 
-3. Pilar 1: Configuração Pré-Voo (Seleção de Modo e Ferramentas)
+DATABRICKS_HOST = os.getenv("DATABRICKS_HOST")  # ex: "https://<workspace>.cloud.databricks.com"
+DATABRICKS_TOKEN = os.getenv("DATABRICKS_TOKEN")
 
-O primeiro requisito exige que o usuário selecione o modo de operação e as ferramentas disponíveis antes de iniciar a interação. Isso transforma o chat de um utilitário "sempre ligado" para uma "Sessão Configurada".
-
-3.1 Contexto de Configuração da Sessão
-
-Atualmente, o useChat inicializa uma sessão imediatamente. Precisamos introduzir um estado de "Lobby". Isso deve ser modelado formalmente em types.ts. Devemos estender a definição de Session para incluir metadados de configuração que persistirão por toda a vida daquela conversa.
-
-TypeScript
-
-
-// types.ts - Extensão Proposta
-
-export type ChatMode = 'fast-response' | 'deep-analysis' | 'code-generation' | 'creative';
-
-export interface SessionConfig {
-  mode: ChatMode;
-  allowedTools: string; // Lista de IDs de ferramentas permitidas (ex:)
-  modelTemperature: number;
-  maxTokens?: number;
-  systemPromptOverride?: string; // Para casos avançados
-}
-
-export interface Session {
-  id: string;
-  title: string;
-  config: SessionConfig; // Novo campo obrigatório
-  // A estrutura de messages mudará no Pilar 4, mas por enquanto mantemos a referência
-  messages: Message; 
-  createdAt: number;
-  updatedAt: number;
-}
-
-
-
-3.2 UI do Intersticial de Configuração ("O Lobby")
-
-Em vez de renderizar diretamente o ChatInput e MessageList em ChatWindow.tsx 1, devemos implementar uma verificação de estado. Se a sessão for nova e não tiver configuração, renderizamos o componente SessionSetup.
-Este componente deve interagir com o services/toolRegistry.ts, que já exporta getAllToolDefinitions e a lista de ferramentas disponíveis (searchData, listTables).1
-Design Funcional do SessionSetup.tsx:
-Seletores de Modo (Cards):
-Analista de Dados: Pré-configura ferramentas de leitura (searchData, listTables) e widgets de visualização. Temperatura 0.2 (preciso).
-Engenheiro de Dados: Habilita code-executor para SQL/Python e acesso a ferramentas de schema. Temperatura 0.1 (determinístico).
-Explorador Criativo: Desabilita ferramentas estritas, aumenta a temperatura para 0.8. Foco em brainstorming.
-Toggle de Ferramentas (Granularidade Fina):
-Abaixo da seleção de modo, uma lista de checkboxes gerada a partir de toolRegistry.ts permite ao usuário refinar o acesso. Por exemplo, um usuário pode querer o modo "Analista" mas desabilitar o acesso a dados sensíveis (user_table), caso a ferramenta suporte tal granularidade.
-Disparo de Ação:
-O botão "Iniciar Sessão" despacha uma ação SET_SESSION_CONFIG para o redutor do chat, salva a estrutura inicial no IndexedDB via sessionService.ts e transiciona a view para a interface de chat principal.
-
-3.3 Filtragem de Ferramentas no Backend
-
-A função generateSystemPrompt em services/chat/promptFactory.ts deve ser refatorada para aceitar SessionConfig. O prompt do sistema não deve mais listar todas as ferramentas indiscriminadamente.
-
-TypeScript
-
-
-// services/chat/promptFactory.ts (Refatoração)
-
-import { getAllToolDefinitions } from '../toolRegistry';
-
-export function generateSystemPrompt(appConfig: AppConfig, sessionConfig?: SessionConfig): string {
-  const allTools = getAllToolDefinitions();
-  
-  // Filtragem baseada na configuração da sessão
-  const enabledTools = sessionConfig 
-   ? allTools.filter(t => sessionConfig.allowedTools.includes(t.name)) 
-    : allTools;
-    
-  const toolsInfo = enabledTools.map(t => {
-      return `- Tool: "${t.name}"\n Description: ${t.description}\n Parameters: ${JSON.stringify(t.parameters)}`;
-  }).join('\n');
-  
-  // Instruções específicas de modo
-  let modeInstructions = "";
-  if (sessionConfig?.mode === 'code-generation') {
-      modeInstructions = "Prioritize using the code-executor widget. Output raw SQL/Python frequently and avoid summarizing data unless requested.";
-  } else if (sessionConfig?.mode === 'deep-analysis') {
-      modeInstructions = "Always analyze the data for trends, outliers, and correlations. Use Charts aggressively.";
-  }
-  
-  return `You are an intelligent data assistant...
-  ${modeInstructions}
-  You have access to the following tools:
-  ${toolsInfo}
- ...`;
-}
-
-
-Isso garante que o modelo de linguagem (LLM) alucine menos sobre ferramentas que não pode usar e adira estritamente ao comportamento esperado pelo modo selecionado.
-
-4. Pilar 2: Arquitetura de Agentes Customizáveis
-
-O segundo requisito é permitir a criação de diferentes agentes na interface através da customização do prompt de sistema. Isso exige a abstração do conceito de "Assistente" para uma entidade configurável: a AgentDefinition.
-
-4.1 O Padrão de Registro de Agentes (AgentRegistry)
-
-Devemos criar um novo serviço services/agentRegistry.ts, análogo ao toolRegistry.ts 1, mas focado em personas. Além disso, precisamos de persistência para agentes criados pelo usuário. O dashboardStorageService.ts usa IndexedDB 1; devemos estendê-lo ou criar um agentStorageService.ts com um store agents no banco dashboards_db (ou um novo banco agents_db).
-Definição da Entidade Agente:
-
-TypeScript
-
-
-export interface AgentDefinition {
-  id: string;
-  name: string;
-  role: string; // ex: "Senior SQL Architect"
-  description: string;
-  avatarUrl?: string; // Para customizar o ícone em MessageBubble.tsx
-  baseSystemPrompt: string;
-  defaultTools: string; // IDs das ferramentas que este agente prefere
-  capabilities: {
-    canGenerateCharts: boolean;
-    canExecuteCode: boolean;
-    canBrowseInternet: boolean; // Preparação para futuro
-  };
-  style: {
-    tone: 'formal' | 'casual' | 'didactic' | 'concise';
-    verboseReasoning: boolean; // Se deve mostrar <thought> ou ocultar
-  };
-  isSystemDefault: boolean; // Para proteger agentes base contra deleção
-}
-
-
-
-4.2 Interface de Criação de Agentes
-
-A aplicação possui uma página ConfigPage.tsx que atualmente é um placeholder.1 Esta página deve ser transformada no centro de gerenciamento de agentes.
-Utilizando os componentes de formulário já existentes em components/forms/ (como TextInput, TextareaInput, SelectInput, CodeExecutionWidget para testar prompts) 1, devemos construir um editor visual:
-Identidade: Campos para Nome, Função e Avatar.
-Prompt Engineering: Um TextareaInput grande para o baseSystemPrompt. Aqui o usuário define "Você é um especialista em SQL que odeia usar JOINs desnecessários...".
-Capabilities: CheckboxGroup para selecionar ferramentas permitidas.
-Teste de Playground: Um mini-chat embutido na página de configuração para testar o agente antes de salvar.
-
-4.3 Injeção de Prompt em Tempo de Execução
-
-No momento do início do chat (ou troca de agente), o useChat deve recuperar a definição completa do agente.
-A função streamChatResponse em services/chatService.ts precisa ser atualizada. Atualmente, ela chama generateSystemPrompt sem argumentos de agente.1 A nova assinatura deve ser:
-
-TypeScript
-
-
-export async function streamChatResponse(
-  messages: Message, 
-  agent: AgentDefinition, // Injeção de Dependência do Agente
-  sessionConfig: SessionConfig,
-  onChunk: (chunk: string) => void
-): Promise<void> {
-    
-  // Compilação do Prompt Híbrido
-  const finalSystemPrompt = `
-    ${agent.baseSystemPrompt}
-    
-    [Operational Constraints]
-    Tone: ${agent.style.tone}
-    Allowed Tools: ${getToolsFromIds(sessionConfig.allowedTools.filter(t => agent.defaultTools.includes(t)))}
-    
-    ${WIDGET_SCHEMA_DEFINITION} 
-  `;
-  
-  const apiMessages =;
-  
-  //... fetch para Databricks...
-}
-
-
-Esta composição garante que as regras do Agente (personalidade) e as regras da Sessão (segurança/ferramentas) sejam fundidas antes de chegar ao LLM.
-
-5. Pilar 3: Alternância Dinâmica de Agentes (Hot-Swapping)
-
-O Requisito 3 permite selecionar e alterar o agente durante uma conversa ativa. Isso introduz o desafio de manter a coerência do contexto quando a "persona" do interlocutor muda abruptamente.
-
-5.1 Gerenciamento de Contexto e Handoff
-
-Quando o usuário troca de Agente A para Agente B na interface (via um novo Dropdown no ChatHeader.tsx ou acima do ChatInput.tsx), o estado currentAgentId no useChat é atualizado. No entanto, o LLM não "sabe" que mudou de identidade a menos que o instruamos explicitamente no fluxo de mensagens.
-Simplesmente mudar o prompt do sistema na próxima requisição pode confundir o modelo, pois o histórico anterior reflete o comportamento do Agente A. Devemos implementar um padrão de "Mensagem de Sistema de Transição".
-Quando ocorre a troca, injetamos uma mensagem invisível (ou visível como "Evento de Sistema") no histórico que será enviado na próxima interação:
-
-JSON
-
-
-{
-  "role": "system",
-  "content": ": The active assistant has been switched to 'Business Analyst Agent'. You must now adopt the persona defined in your system prompt. Review the conversation history context provided by the previous agent, but answer future queries focusing on business KPIs and ROI analysis rather than technical SQL details."
-}
-
-
-Isso força o modelo a recalibrar sua atenção para as novas diretrizes.
-
-5.2 Atualizações de UI para Conversas Multi-Persona
-
-O componente MessageBubble.tsx atualmente renderiza um ícone genérico de "AI" para mensagens do assistente.1 Para suportar uma conversa fluida com múltiplos agentes, cada mensagem deve carregar metadados sobre quem a gerou.
-Precisamos atualizar a interface Message em types.ts:
-
-TypeScript
-
-
-export interface Message {
-  id: string;
-  role: 'user' | 'assistant' | 'system';
-  content: string;
-  // Novos campos de metadados de autoria
-  authorId?: string; // ID do Agente ou Usuário
-  authorName?: string; // Snapshot do nome no momento da geração
-  authorAvatar?: string; // URL do avatar
-  //... outros campos existentes
-}
-
-
-No MessageBubble.tsx, a renderização condicional do avatar deve usar esses campos:
-
-TypeScript
-
-
-// components/chat/MessageBubble.tsx
-
-const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
-  //...
-  return (
-    <div className="flex items-start gap-3...">
-      <div className="flex-shrink-0 w-8 h-8...">
-        {message.authorAvatar? (
-          <img src={message.authorAvatar} alt={message.authorName} className="rounded-full" />
-        ) : (
-          <DefaultAIIcon />
-        )}
-      </div>
-      <div className="flex flex-col...">
-         {/* Label do Autor para clareza em chats multi-agente */}
-         <span className="text-xs text-gray-400 ml-1 mb-1">{message.authorName |
-
-| 'Assistant'}</span>
-         <div className="...">
-            {/* Conteúdo */}
-         </div>
-      </div>
-    </div>
-  );
-};
-
-
-Isso fornece clareza visual imediata sobre quem disse o quê, essencial quando múltiplos agentes colaboram em um único problema.
-
-6. Pilar 4: Ramificação Conversacional (O Modelo de Multiverso)
-
-O requisito mais complexo é a criação de branchs (ramificações): "recomeçar a conversa de um ponto e ainda assim voltar para uma branch anterior". Isso exige abandonar o modelo linear de array (Message) em favor de uma estrutura de dados de Árvore ou Grafo.
-
-6.1 Da Lista Linear para o Grafo Direcionado
-
-Atualmente, messages é uma lista onde $i$ precede $i+1$. Devemos adotar uma estrutura onde cada mensagem aponta para seu pai, e pode ter múltiplos filhos.
-Novo Esquema de Dados (types.ts):
-
-TypeScript
-
-
-export interface TreeMessage extends Message {
-  id: string;
-  parentId: string | null; // null se for a raiz da conversa
-  childrenIds: string; // Lista de IDs de mensagens que responderam a esta
-}
-
-export interface Session {
-  id: string;
-  // messageMap armazena todas as mensagens de todos os branches, indexadas por ID
-  messageMap: Record<string, TreeMessage>; 
-  // currentLeafId aponta para a mensagem final do branch que o usuário está visualizando agora
-  currentLeafId: string | null; 
-  //... outros campos
-}
-
-
-
-6.2 Algoritmo de Travessia e Renderização
-
-O componente MessageList.tsx 1 não pode mais simplesmente mapear um array. Ele precisa de um "Seletor de Thread".
-Criamos uma função utilitária getThreadFromLeaf(leafId: string, messageMap: Record<string, TreeMessage>): TreeMessage.
-Lógica do Algoritmo:
-Comece no leafId.
-Adicione a mensagem atual a um array temporário.
-Busque o parentId da mensagem atual.
-Se parentId existir, mova o cursor para o pai e repita o passo 2.
-Se parentId for nulo, pare.
-Inverta o array temporário (para ter ordem cronológica: Raiz -> Folha).
-O useChat exporá este array linear derivado (messages) para que o MessageList possa renderizar sem saber que existe uma árvore complexa por trás.
-
-6.3 Interface de Navegação entre Branches
-
-O MessageBubble.tsx precisa ganhar controles de navegação. Se uma mensagem tiver childrenIds.length > 1, significa que há múltiplos caminhos a partir daquele ponto.
-Implementação Visual:
-No rodapé do balão de mensagem, adicionamos setas de navegação < e > e um contador 2 / 5.
-Ação de Clique < (Anterior): Busca o índice do filho atual no array childrenIds e seleciona o índice anterior. Atualiza o currentLeafId da sessão descendo por aquele novo caminho até o final.
-Ação de Clique Edit (Criar Branch): Ao editar uma mensagem de usuário antiga, não mutamos o conteúdo. Criamos uma nova mensagem com o mesmo parentId da mensagem editada. O sistema automaticamente a adiciona ao childrenIds do pai e atualiza o currentLeafId para esta nova mensagem, efetivamente criando um novo universo paralelo de conversa.
-
-6.4 Redutor de Estado Baseado em Grafo
-
-O chatReducer em useChat.tsx 1 precisa ser reescrito para operações de grafo.
-Lógica Atual (Linear):
-
-TypeScript
-
-
-case 'SEND_MESSAGE':
-  return {...state, messages: [...state.messages, action.payload] };
-
-
-Nova Lógica (Branching):
-
-TypeScript
-
-
-case 'SEND_MESSAGE':
-  const parentId = state.currentLeafId; // O novo pai é a folha atual
-  const newMessage: TreeMessage = { 
-     ...action.payload, 
-      parentId, 
-      childrenIds: 
-  };
-  
-  // Atualizar o pai para incluir este novo filho
-  const parentMessage = state.messageMap[parentId];
-  const updatedParent = { 
-   ...parentMessage, 
-    childrenIds: [...parentMessage.childrenIds, newMessage.id] 
-  };
-
-  return {
-   ...state,
-    messageMap: {
-     ...state.messageMap,
-      [parentId]: updatedParent,
-      [newMessage.id]: newMessage
-    },
-    currentLeafId: newMessage.id // Avança a ponta do branch atual
-  };
-
-
-Isso garante que nenhum histórico seja perdido. O usuário pode sempre "voltar" para o branch original navegando pelos childrenIds do nó pai.
-
-7. Otimização de Renderização e Performance em React
-
-A introdução de uma estrutura de árvore e a renderização de múltiplos widgets pesados (D3.js) exigem cuidado extremo com a performance para evitar travamentos da UI.
-
-7.1 Virtualização da Lista de Mensagens
-
-À medida que os branches crescem, renderizar centenas de componentes MessageBubble (cada um contendo potenciais DynamicWidgetRenderer) se torna custoso. O arquivo MessageList.tsx atualmente renderiza um map simples e usa scrollIntoView.1
-Devemos migrar para react-window (já presente no package.json 1 para a planilha) ou react-virtuoso. A virtualização garantirá que apenas as mensagens visíveis no viewport sejam montadas no DOM, reduzindo drasticamente a pegada de memória e o tempo de renderização do React Reconciliation.
-
-7.2 Estratégia de Memoização de Widgets
-
-O DynamicWidgetRenderer possui um defeito crítico para a arquitetura de branching proposta. Ele carrega dados no efeito colateral de montagem:
-
-TypeScript
-
-
-// components/chat/DynamicWidgetRenderer.tsx 
-useEffect(() => {
-  const fetchData = async () => {... getDataForSource... }
-  fetchData();
-},);
-
-
-Se um usuário navegar entre branches (ex: trocar da versão 1 da resposta para a versão 2), os componentes serão desmontados e remontados. Isso disparará novas requisições de rede (getDataForSource), causando lentidão e "loading spinners" desnecessários.
-Solução: Cache de Contexto de Dados (DataCacheContext)
-Devemos implementar um cache global para a sessão. Antes de o widget disparar o fetch, ele verifica o cache.
-
-TypeScript
-
-
-// hooks/useDataCache.tsx (Novo Hook)
-const useDataCache = (queryKey: string, fetcher: () => Promise<any>) => {
-  const { cache, setCache } = useContext(DataCacheContext);
-  
-  useEffect(() => {
-    if (!cache[queryKey]) {
-      fetcher().then(data => setCache(queryKey, data));
+@router.post("/api/query")
+def run_sql_query(query: str, warehouse_id: str = None):
+    """Executa uma consulta SQL em um Warehouse do Databricks e retorna os resultados."""
+    # Determina o warehouse ID a usar
+    wh_id = warehouse_id or os.getenv("DATABRICKS_WAREHOUSE_ID")
+    if not wh_id:
+        raise HTTPException(status_code=400, detail="Warehouse ID não fornecido")
+    # Monta a URL do endpoint de execução de statement
+    url = f"{DATABRICKS_HOST}/api/2.0/sql/statements/"
+    payload = {
+        "warehouse_id": wh_id,
+        "statement": query,
+        "wait_timeout": 30  # tempo máx (segundos) para aguardar resultado síncrono (até 50s):contentReference[oaicite:4]{index=4}
     }
-  }, [queryKey]);
-
-  return cache[queryKey];
-};
-
-
-O DynamicWidgetRenderer deve ser atualizado para usar este hook, usando uma chave composta (ex: dataSource + filtros) para garantir que a alternância entre branches seja instantânea (Optimistic UI).
-
-8. Segurança e Governança
-
-A transição para um sistema onde usuários definem agentes e executam código exige controles de segurança rigorosos.
-
-8.1 Vazamento de Segredos no Cliente (Token Databricks)
-
-O arquivo vite.config.ts atual expõe DATABRICKS_TOKEN via define.1 Isso incorpora o token hardcoded no bundle JS final entregue ao navegador. Qualquer usuário com conhecimento básico de DevTools pode extrair esse token e executar queries arbitrárias contra o cluster Databricks.
-Mitigação Obrigatória: Implementação de um Backend-for-Frontend (BFF). O cliente React deve enviar a intenção de execução (query, tool_name) para um endpoint /api/execute-tool. O servidor (Node.js/Express ou Next.js API Route) mantém o segredo DATABRICKS_TOKEN, valida a sessão do usuário, aplica Rate Limiting e só então encaminha a requisição para o Databricks.
-
-8.2 Prevenção de Injeção de Prompt e SQL
-
-Permitir que usuários criem agentes com prompts customizados cria o risco de "Prompt Injection", onde um agente malicioso é desenhado para exfiltrar dados ou ignorar diretrizes de segurança.
-Além disso, o CodeExecutionWidget permite rodar SQL. Se o agente gera DROP TABLE fruit_sales, e o widget está configurado como autoExecute: true (embora o padrão seja false 1), dados podem ser perdidos.
-Defesa em Profundidade:
-Validação de Esquema: O toolRegistry.ts deve validar rigidamente os parâmetros.
-Code Review Forçado: Para ações destrutivas (detectadas via regex simples como DROP, DELETE, ALTER no SQL), o widget CodeExecutionWidget deve forçar a prop isEditable: true e autoExecute: false, e exibir um aviso visual de alto risco (componente ExclamationTriangleIcon já existente 1).
-RBAC (Role-Based Access Control): Utilizar o objeto User do useAuth.tsx 1 para restringir o acesso ao "Modo Engenheiro" apenas para usuários com role admin.
-
-9. Tabelas Comparativas e de Especificação
-
-Abaixo apresentamos especificações detalhadas para auxiliar a implementação.
-
-Tabela 9.1: Comparação de Modelos de Estado de Mensagem
-
-Característica
-Modelo Atual (Linear)
-Modelo Proposto (Grafo/Árvore)
-Benefício Arquitetural
-Estrutura
-Array<Message>
-Map<ID, Message> + LinkedList
-Acesso O(1) a qualquer nó; suporte a múltiplos pais/filhos.
-Navegação
-Scroll Vertical Apenas
-Scroll Vertical + Navegação Horizontal entre Branches
-Permite explorar cenários alternativos ("E se eu tivesse perguntado diferente?").
-Persistência
-Simples (JSON Blob)
-Complexa (Requer normalização)
-Maior integridade referencial; permite carregar branches parciais (lazy loading).
-Contexto
-Janela deslizante simples
-Reconstrução de caminho raiz-folha
-Otimiza o uso de tokens enviando apenas o "caminho ativo" para o LLM.
+    headers = {"Authorization": f"Bearer {DATABRICKS_TOKEN}"}
+    try:
+        resp = requests.post(url, json=payload, headers=headers)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao conectar no Databricks: {e}")
+    if resp.status_code != 200:
+        # Propaga o erro como 400/500 conforme o caso
+        raise HTTPException(status_code=resp.status_code, detail=f"Databricks SQL API erro: {resp.text}")
+    data = resp.json()
+    # Verifica se a consulta foi executada dentro do timeout (síncrona) ou se está async
+    if "result" in data:
+        # Resultado disponível imediatamente (consulta curta)
+        return {"result": data["result"]}
+    else:
+        # Consulta demorou mais que timeout e virou async; teremos um statement_id para verificar status
+        statement_id = data.get("statement_id")
+        status = data.get("status", {}).get("state")
+        # Podemos implementar polling para aguardar conclusão
+        # (Aqui, por simplicidade, retornamos o ID e status inicial; o front pode chamar outra rota /status ou repetir a chamada até completar)
+        return {"statement_id": statement_id, "status": status}
 
 
-Tabela 9.2: Especificação de Propriedades do CodeExecutorWidget (Atualizado)
+Funcionamento: Este endpoint POST /api/query espera um corpo (JSON) contendo pelo menos o campo query (string SQL). Opcionalmente, pode aceitar warehouse_id (poderíamos também pegar via query param ou route param). Ele então monta a chamada para POST /api/2.0/sql/statements no workspace Databricks, passando o warehouse_id necessário e a query. Usamos um wait_timeout de 30s para que o Databricks tente retornar o resultado de forma síncrona
+docs.pinkfish.ai
+ (o Databricks permite até 50s; se deixarmos 0s ele sempre fará async). Caso a consulta termine dentro desse tempo e os resultados sejam pequenos, a resposta já incluirá result com o result-set. Caso contrário, receberemos apenas um statement_id e um status indicando que está em execução ou pendente.
 
-O widget de execução de código é central para a capacidade agêntica.
-Propriedade
-Tipo
-Padrão
-Descrição & Requisito de Segurança
-type
-'code-executor'
--
-Discriminador para o DynamicWidgetRenderer.
-language
-'sql' | 'python' | 'scala'
-'sql'
-Define o highlighting (PrismJS) e o backend de execução.
-code
-string
--
-O payload gerado pelo agente. Deve ser sanitizado antes de renderizar.
-isEditable
-boolean
-true
-Permite ao humano corrigir o código do agente. Crítico para Human-in-the-Loop.
-autoExecute
-boolean
-false
-Se true, executa ao montar. DEVE ser false para operações de escrita/delete.
-riskLevel
-'low' | 'high'
-'low'
-(Novo) Inferido pelo parser. Se 'high', bloqueia auto-execução e exige confirmação dupla.
-context
-object
-{}
-Metadados de catálogo/schema necessários para execução no Databricks.
+No exemplo acima, para simplificar, se a chamada for async nós retornamos imediatamente o ID e status; uma implementação mais robusta pode fazer polling: e.g., a cada 5s chamar GET /api/2.0/sql/statements/{statement_id} até o estado ser SUCCEEDED ou FAILED
+medium.com
+. Também é possível retornar imediatamente e o front-end chamar outro endpoint para pegar o status/result, ou usar WebSockets/Server-Sent Events para enviar atualizações ao front conforme a query executa. Como primeiro passo, o design síncrono com timeout atende muitas situações comuns.
+
+Quando a consulta é bem-sucedida e rápida, data["result"] incluirá provavelmente campos como data_array (linhas), columns etc., ou até um link externo para baixar os resultados se forem grandes
+medium.com
+. Podemos simplificar retornando isso diretamente ao front-end. Este então pode exibir numa tabela ou abrir o spreadsheet com os dados.
+
+Observação: Um warehouse_id válido deve ser usado; esse ID pode ser obtido na página do Databricks SQL Warehouse (chamado HTTP Path nas configurações)
+docs.databricks.com
+docs.pinkfish.ai
+. O token de autenticação também deve ter permissão de uso no warehouse.
+
+Endpoints FastAPI – Leitura e Escrita de Arquivos no DBFS
+
+Para manipular arquivos no Databricks File System (DBFS) via API, utilizaremos as rotas da DBFS REST API. Em particular, usaremos:
+
+GET /api/2.0/dbfs/read – para ler o conteúdo de um arquivo no DBFS.
+
+POST /api/2.0/dbfs/put – para escrever (ou sobrescrever) um arquivo no DBFS com conteúdo fornecido.
+
+A leitura de arquivo via API retorna os dados em formato Base64 dentro de um JSON
+stackoverflow.com
+, portanto nosso backend precisará decodificá-los antes de enviá-los ao front (especialmente se o arquivo for texto). A escrita exige enviar o conteúdo também em Base64. Importante: a API dbfs/put suporta conteúdo inline de até 1 MB
+docs.databricks.com
+; para arquivos maiores, seria necessário usar o fluxo multi-partes (create + add-block + close), mas para simplicidade assumiremos arquivos de texto pequenos ou moderados (ex.: configurações, scripts SQL, etc., geralmente <1MB).
+
+Exemplo de endpoints para arquivos:
+
+from base64 import b64decode, b64encode
+from fastapi import UploadFile, File
+
+@router.get("/api/files")
+def read_file(path: str):
+    """Lê um arquivo do DBFS e retorna seu conteúdo (texto)."""
+    url = f"{DATABRICKS_HOST}/api/2.0/dbfs/read"
+    headers = {"Authorization": f"Bearer {DATABRICKS_TOKEN}"}
+    resp = requests.get(url, headers=headers, json={"path": path})
+    if resp.status_code != 200:
+        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+    data = resp.json()
+    base64_content = data.get("data", "")
+    # Decodifica de Base64 para bytes, depois para string (assumindo arquivo texto UTF-8)
+    try:
+        content_bytes = b64decode(base64_content)
+        content_str = content_bytes.decode('utf-8')
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Falha ao decodificar arquivo: {e}")
+    return {"path": path, "content": content_str}
+
+@router.post("/api/files")
+def write_file(path: str, content: str):
+    """Escreve (ou sobrescreve) um arquivo no DBFS com o conteúdo fornecido."""
+    url = f"{DATABRICKS_HOST}/api/2.0/dbfs/put"
+    headers = {"Authorization": f"Bearer {DATABRICKS_TOKEN}"}
+    # Codifica o conteúdo em Base64 (esperado pela API)
+    content_b64 = b64encode(content.encode('utf-8')).decode('utf-8')
+    payload = {"path": path, "overwrite": True, "contents": content_b64}
+    resp = requests.post(url, headers=headers, json=payload)
+    if resp.status_code != 200:
+        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+    return {"path": path, "message": "Arquivo salvo com sucesso."}
 
 
-10. Conclusão
+Explicação:
 
-A implementação do plano detalhado neste relatório elevará o diegomrodrigues2-databricks-dashboard-app de uma ferramenta de visualização competente para uma plataforma de orquestração cognitiva de classe empresarial. A mudança para uma estrutura de dados de grafo para o histórico de chat é a pedra angular que habilita funcionalidades avançadas como o branching, enquanto a abstração do registro de agentes e ferramentas permite uma flexibilidade operacional sem precedentes.
-Aproveitando a base sólida de componentes React e utilitários de parsing já existentes, o esforço de engenharia pode se concentrar na lógica de estado e segurança, minimizando o retrabalho de UI. Este roteiro não apenas atende aos requisitos imediatos do usuário, mas prepara a aplicação para um futuro onde múltiplos agentes especializados colaborarão de forma autônoma para resolver problemas de dados complexos, sempre sob a supervisão e controle do operador humano.
-Works cited
-diegomrodrigues2-databricks-dashboard-app-8a5edab282632443 (3).txt
+O endpoint GET /api/files?path=/mnt/alguma_coisa/arquivo.txt chama o dbfs/read passando o caminho completo no DBFS. Se o arquivo existe e é legível, o Databricks retorna um JSON com bytes_read e data (a string Base64 do conteúdo)
+stackoverflow.com
+. Decodificamos e retornamos o texto puro. Observação: Se for necessário suportar arquivos binários (ex.: imagens), poderíamos retornar os bytes ou talvez usar Streaming, mas como o uso aqui é para um editor de texto, assumir conteúdo textual é adequado.
+
+O endpoint POST /api/files espera um JSON no corpo contendo path (caminho de destino no DBFS) e content (texto a escrever). Internamente converte o texto para Base64 e usa dbfs/put com overwrite=true. Conforme a documentação, podemos enviar o conteúdo inteiro em base64 contanto que seja < 1 MB
+docs.databricks.com
+. Em caso de sucesso (código 200), retornamos uma mensagem de OK.
+
+Nota: Em vez de passar content como string pura JSON (que pode ter problemas com quebras de linha), outra estratégia seria usar UploadFile do FastAPI para receber um arquivo, mas como estamos lidando com texto simples, o JSON direto funciona.
+
+Também poderíamos suportar overwrite=false se quisermos prevenir sobrescrita acidental, mas aqui optamos por sempre sobrescrever.
+
+Além disso, poderíamos implementar um endpoint de listagem de arquivos (ex: GET /api/listdir?path=/mnt/dir) usando GET /api/2.0/dbfs/list para permitir ao editor navegar em diretórios. Isso seria útil caso a pasta específica tenha vários arquivos e o usuário escolha qual editar. Por simplicidade, mencionamos que é possível implementar (a resposta foca em leitura/escrita conforme pedido).
+
+No front-end, imaginamos que exista um componente de editor de texto que, ao ser aberto, chama o GET /api/files para carregar o conteúdo atual de um arquivo no DBFS, e ao salvar envia o conteúdo editado via POST /api/files. Com esses endpoints, atingimos o item 3 (Leitura/escrita em pasta específica do DBFS).
+
+Estratégia Segura de Configuração de Credenciais
+
+Manter as credenciais (como o token de acesso do Databricks) seguras é fundamental. Na arquitetura atual, o token nunca deve estar no código ou bundle do front-end – isso foi identificado como uma vulnerabilidade na versão atual do projeto. Em vez disso, usaremos variáveis de ambiente, arquivos de configuração fora do front, e os recursos de secrets do próprio Databricks para fornecer essas credenciais ao backend de forma segura:
+
+1. Variáveis de ambiente e arquivos .env (local/dev): Em desenvolvimento local, podemos usar um arquivo .env no diretório backend/ contendo chaves como DATABRICKS_TOKEN, DATABRICKS_HOST (URL do workspace) e possivelmente DATABRICKS_WAREHOUSE_ID. O backend pode carregar automaticamente esse .env (usando python-dotenv no startup) para popular os.environ. Assim, desenvolvedores não colocam tokens diretamente no código, apenas nesse arquivo local (que nunca deve ser commitado ao repositório). Um .env.example sem valores reais pode documentar quais variáveis são necessárias.
+
+2. Databricks Secret Scope (produção): Quando for implantar como um Databricks App, devemos utilizar o gerenciador de segredos do Databricks em vez de passar valores sensíveis diretamente. O Databricks Apps permite adicionar Secret Resources ao app: essencialmente, nós armazenamos o token de acesso (e outros segredos) em um Secret Scope no workspace, e então configuramos o app para ter acesso de leitura a esse scope
+docs.databricks.com
+. Ao fazer o deploy, o Databricks irá injetar esses segredos como variáveis de ambiente no container do app
+docs.databricks.com
+ – dessa forma, o token chega ao nosso FastAPI sem nunca ficar exposto em código ou na interface do Databricks
+docs.databricks.com
+. Por exemplo, podemos configurar um secret scope "myapp-secrets" com a key dbr_token, e no app config mapeá-lo para a env DATABRICKS_TOKEN. O mesmo vale para outras credenciais (se precisássemos, por ex., uma chave da OpenAI API, etc.).
+
+(Citação do Databricks Apps docs: "Apps retrieve these secrets at runtime, which keeps them out of your application code and environment definitions."
+docs.databricks.com
+)
+
+3. Entrada de credenciais via UI (opcional): Dependendo do caso de uso, poderíamos permitir que o usuário entre com seu próprio token (por exemplo, se o app precisar conectar em diferentes workspaces/databases dinamicamente). Nesse cenário, poderíamos ter uma tela de configuração solicitando o token e a URL do workspace. O backend poderia receber esses dados e armazenar em memória apenas para aquela sessão de usuário (ou em um cookie de sessão). Mas isso apresenta desafios de segurança – ter o usuário fornecendo token via UI exige proteger muito bem a sessão e tráfego (TLS obrigatório) e jamais persistir esse token no front. Dado que o escopo aqui parece um app interno a ser deployado já com um workspace definido, provavelmente utilizaremos o token da empresa fixo via secrets, então não implementaremos input de token pelo usuário final.
+
+Resumindo, a estratégia é: utilizar variáveis de ambiente e serviços de segredo para configurar credenciais, nunca codificá-las no front-end ou em repositórios públicos. Em código, acessamos as credenciais via os.getenv('DATABRICKS_TOKEN') e semelhantes. Caso alguma credencial não esteja configurada, o backend pode recusar inicializar ou pelo menos retornar erros claros pedindo configuração.
+
+Estratégia para Proteger o Backend
+
+Com o backend centralizando as operações sensíveis, precisamos protegê-lo contra acessos indevidos e uso malicioso. Vários níveis de proteção devem ser considerados:
+
+CORS e Origem Segura: Configure o FastAPI para aceitar requisições somente do domínio/origem do front-end. Em dev, isso pode ser http://localhost:5173, e em produção, se front e back estão no mesmo host, não há problema de CORS (pois servimos o front pelo backend). De todo modo, adicionar o middleware de CORS do FastAPI restringindo a origin correta e habilitando credenciais se necessário é boa prática. Isso impede que terceiros (outros sites) façam chamadas ao nosso backend com um usuário logado, por exemplo.
+
+Autenticação de Usuário: Se o app for usado internamente por várias pessoas, considere implementar autenticação no backend. Pode ser simples (um login com senha) ou integrado com o Auth do Databricks (se há algum SSO). Isso garantiria que apenas usuários autorizados acessem as funções (especialmente porque algumas permitem modificação de arquivos ou execução de queries arbitrárias). Em alguns cenários internos, pode-se optar por proteger o app atrás do login do workspace (ex.: só acessível para funcionários via rede interna ou SSO do Databricks), mas caso contrário, implemente pelo menos um controle de acesso. Uma abordagem leve: exigir um token de API próprio do app em cada requisição (por ex, configurar uma chave secreta para o app e o front enviá-la via header nas requisições; o backend valida antes de prosseguir). Isso não substitui autenticação de usuário, mas adiciona uma camada (segredo compartilhado) que dificulta acesso não autorizado.
+
+Validação e Sanitização de Inputs: O backend deve validar os parâmetros recebidos. Por exemplo, no endpoint de query SQL, poderíamos limitar o que pode ser executado. Se o caso de uso é apenas leitura/analítica, podemos rejeitar comandos perigosos (DROP/DELETE) verificando a string da query por um whitelist ou blacklist. Alternativamente, se for permitido comandos de modificação, pelo menos registrar ou pedir confirmação. No caso de prompts do LLM gerando SQL, há risco de SQL injection via prompt; devemos manter as queries dentro do contexto esperado. O código existente já sugere um analisador de risco (analyzeRisk) para queries geradas – isso pode ser aplicado no backend antes de executar qualquer SQL sugerido pelo modelo, marcando consultas potencialmente destrutivas e talvez exigindo autorização do usuário antes de executar.
+
+Rate Limiting e Size Limiting: Para evitar abuso, podemos implementar limite de requisições por minuto por IP ou por usuário (existem libs como SlowAPI para FastAPI). Assim, um usuário mal-intencionado não consegue fazer spam de queries pesadas. Também podemos limitar tamanhos – por exemplo, se alguém tenta ler um arquivo grande via /api/files, podemos bloquear caso exceda um limite (embora a API do DBFS já tenha limites práticos).
+
+Uso de Segredos no Servidor: Conforme já descrito, o token do Databricks fica somente no servidor. Nunca enviamos esse token ao front ou a logs. Inclusive, ao configurar o app no Databricks, usar valueFrom para mapear o secret em vez de expor valor em plaintext nas variáveis de ambiente do painel do app
+docs.databricks.com
+.
+
+Comunicação Segura: Garantir que o serviço esteja acessível via HTTPS (no Databricks Apps isso já é padrão, no local usar https:// se for exposto). Isso é fundamental para proteger tokens em trânsito e quaisquer dados sensíveis.
+
+Proteção das APIs de arquivos: No design atual, api/files permite ler e escrever arquivos arbitrários no DBFS, desde que se saiba o path. Para evitar vazamento ou edição indevida, podemos restringir a pasta específica que o app manipula. Por exemplo, se o requerimento 3 menciona "uma pasta específica do DBFS", podemos fixar um diretório base, como dbfs:/FileStore/appdata/<nome-app>/. Então, o backend pode verificar que o path fornecido sempre comece com esse prefixo, recusando paths fora. Isso evita que alguém tente acessar dbfs:/ root ou outras áreas críticas.
+
+Logs e Auditoria: Registrar no backend quando queries são executadas ou arquivos alterados, para fins de auditoria, pode ser útil em contexto empresarial. Esses logs não ficariam acessíveis ao front-end comum, mas ajudariam a monitorar uso indevido.
+
+Em resumo, a proteção do backend envolve tanto controles de acesso (quem pode usar as APIs) quanto filtros de conteúdo (o que as APIs podem fazer). Dado que o app é interno, poderemos confiar nos usuários autenticados do workspace, mas aplicar best practices (como não expor endpoints desnecessários e sempre validar inputs) é importante para evitar tanto ataques externos quanto erros acidentais do usuário.
+
+Integração com LLM Agents (Chat do App)
+
+O aplicativo possui um componente de chat com um Agente LLM (Large Language Model) integrado – isto é evidenciado por arquivos como chatService.ts e promptFactory.ts no front-end. O objetivo agora é expor metadados do workspace Databricks para esse agente e integrar as novas capacidades (consulta SQL, acesso a dados) ao fluxo de conversa.
+
+1. Exposição de Metadados do Workspace: Podemos implementar um endpoint no backend (por exemplo, GET /api/metadata) que retorna informações como catalogs/esquemas, tabelas e colunas disponíveis. Isso pode ser usado pelo LLM para dar respostas contextuais ou ajudar a formular queries. Duas formas de obter esses metadados:
+
+Via consultas SQL: usando o mesmo mecanismo de query, podemos consultar as views de sistema/information_schema do Databricks. Por exemplo, executar SHOW SCHEMAS ou consultar information_schema.tables para obter todas as tabelas e colunas. O backend poderia cachear essas informações periodicamente (já que a estrutura de dados muda raramente) e servir via API.
+
+Via API do Unity Catalog: se o workspace usa Unity Catalog, existe API REST para listar catálogos, esquemas e tabelas. Isso exigiria chamadas adicionais (e possivelmente permissões diferentes). Uma abordagem simples e universal é a via SQL mesmo.
+
+Por exemplo, poderíamos ter no backend:
+
+@router.get("/api/metadata")
+def get_metadata():
+    results = {}
+    # obter lista de esquemas
+    schemas = run_sql_query("SHOW SCHEMAS")  # reusar função do query endpoint
+    results["schemas"] = [row["databaseName"] for row in schemas]  # parse conforme estrutura retornada
+    # para cada schema, pegar tabelas:
+    results["tables"] = {}
+    for schema in results["schemas"]:
+        tables = run_sql_query(f"SHOW TABLES IN {schema}")
+        results["tables"][schema] = [t["tableName"] for t in tables]
+    # opcional: colunas de cada tabela (cuidado: pode ser muito dado se muitas tabelas)
+    return results
+
+
+Isso produziria um JSON com todos os esquemas e tabelas. Dependendo do tamanho, podemos restringir a um catálogo específico ou permitir query de metadados sob demanda (ex: front pede colunas só quando necessário).
+
+O importante é que o agente LLM terá acesso a essas informações. Como integrá-las? Há algumas estratégias:
+
+Contexto no Prompt: Incluir os metadados relevantes diretamente no prompt do LLM. Por exemplo, o promptFactory.ts pode ser modificado para adicionar ao sistema ou ao usuário uma mensagem contendo as tabelas disponíveis. Ex: "O workspace possui as seguintes tabelas: Sales(nome VARCHAR, valor INT), Customers(id INT, nome VARCHAR, ...)". Porém, listar tudo pode ser impraticável se for extenso – então talvez apenas esquemas/tabelas principais ou aquelas utilizadas atualmente no dashboard.
+
+Ferramenta/Plugin do agente: Uma abordagem poderosa é tornar o backend de metadados um tool que o agente pode chamar quando precisar. Pelo que vemos no código, há menção a AgentDefinition e possivelmente um registro de ferramentas (há referências a toolRegistry e getAllToolDefinitions). Podemos criar uma ferramenta chamada, por exemplo, "ListTables" ou "GetSchema" que, quando invocada pelo agente, faz uma requisição à API /api/metadata para obter os dados. Se estivermos usando uma arquitetura de agente do tipo ReAct ou através de OpenAI function calling, podemos definir esta função explicitamente.
+
+Por exemplo, se migrarmos parte do agente para o backend Python usando OpenAI API, poderíamos definir uma function list_tables(schema: Optional[str]) que internamente chama get_metadata (ou uma variante para um schema específico) e retorna a lista de tabelas/colunas, permitindo que o ChatGPT decida chamá-la. Entretanto, manter no front também é viável: o front-end, ao receber uma resposta parcial do LLM indicando que precisa de metadados, pode chamar o backend e retornar a informação ao modelo (dependendo de como o streaming está implementado).
+
+Como o código atual usa tokens especiais WIDGET_START/END e não sabemos se está usando function calling nativo, podemos integrar de forma customizada: por exemplo, definir que se o usuário perguntar algo como "Quais tabelas tenho disponíveis?", o app intercepta essa pergunta antes (ou o LLM devolve um comando especial) e então o front chama /api/metadata e formata a resposta. Esse seria um fluxo manual. Outra opção: ajustar o system prompt para listar tabelas no início da conversa para que o LLM já saiba.
+
+2. Integração das Novas Funcionalidades no Chat: Atualmente, chatService.ts provavelmente faz streaming de respostas de um modelo (talvez do Dolly ou ChatGPT) e utiliza promptFactory.ts para montar as mensagens de sistema/usuário. Precisaremos adaptar isso em dois pontos:
+
+Remover chamadas diretas ao Databricks do front: Antes, o front podia estar chamando diretamente o endpoint de modelo do Databricks (como indicado por variáveis DATABRICKS_ENDPOINT_URL e TOKEN no código atual). Agora, a chamada ao modelo será feita pelo backend. Podemos criar uma rota POST /api/chat ou similar, que recebe a mensagem do usuário e as informações de agente, e do lado do backend faz a interação com o LLM. Por simplicidade, se quisermos inicialmente redirecionar a chamada 1-para-1, o chatService front pode simplesmente fazer fetch('/api/chat', { userMessage, agentId }) em vez de fetch(DATABRICKS_ENDPOINT_URL). O backend então pega userMessage, monta o prompt (talvez chamando uma função Python que replica o que promptFactory fazia em TS) e chama a API do modelo (usando requests para OpenAI ou para o endpoint Dolly no Databricks). O backend enviaria de volta a resposta ou faria streaming via SSE/websocket.
+
+Isso mantém o token do modelo seguro (seja OpenAI API key ou Databricks token) no servidor, alinhado à recomendação de BFF.
+
+Ferramentas do agente (execução de queries): O LLM agente agora pode contar com a capacidade de executar SQL e ler arquivos através do backend. Como integrar isso? Uma maneira é seguir o que o projeto parece já implementar com os WIDGET tokens. Por exemplo, na saída de exemplo encontramos:
+
+${WIDGET_START_TOKEN}
+{ "type": "code-executor", "language": "sql", "code": "SELECT * FROM table" }
+${WIDGET_END_TOKEN}
+
+
+Isso sugere que o modelo LLM, ao decidir que quer executar uma query, produz um comando especial (um JSON anotado dentro de tokens delimitadores) que o front-end reconhece. O front provavelmente intercepta esse chunk de resposta e, via getDataForSource ou similar, executa a query e depois exibe o resultado (talvez substituindo o widget pelo resultado ou abrindo planilha).
+
+Com o backend em ação, implementar isso fica mais fácil: quando o front detecta um widget "type": "code-executor", "language": "sql", ele pode imediatamente chamar nosso endpoint /api/query passando o código SQL. Quando o backend retornar os dados, o front-end pode então mostrar o resultado (talvez renderizando um componente de tabela ou gráfico). Esse seria o agente usando a ferramenta de execução de SQL. Tudo ocorre de forma coordenada: o LLM decide e sugere a query, o front-end executa via backend e mostra ao usuário.
+
+De forma semelhante, poderíamos ter um widget ou comando para leitura de arquivo, se fosse necessário: e.g., { "type": "file-reader", "path": "/mnt/..." } e então o front chamaria /api/files para obter o conteúdo e o LLM poderia incorporar a info. Mas esse caso não foi explicitamente mencionado; a prioridade parece ser queries SQL.
+
+Incorporação de Metadados no agente: Suponha que o usuário pergunte algo sobre os dados disponíveis. Poderíamos configurar o agente para responder com base nos metadados. Se optarmos por não listar tudo no prompt (para não poluir), podemos instruir o agente (via system prompt) a responder "Posso buscar essa informação para você." e então produzir um widget de listagem de tabelas, ou simplesmente chamar a ferramenta internamente (se integrarmos function calling). Uma implementação possível é: se o LLM não tem conhecimento das tabelas, mas o usuário pergunta "Quais tabelas existem no schema X?", o agente poderia responder com um formato especial que o front reconhece para acionar a ferramenta de metadados. Por exemplo, retornar ${WIDGET_START}{"type": "metadata", "schema": "X"}${WIDGET_END}; o front então chamaria /api/metadata?schema=X e renderizaria a resposta (ou alimentar de volta ao LLM).
+
+Isso tudo depende de como o AgentDefinition e o promptFactory serão evoluídos. Pelas notas na base de código, parece que o design futuro planeja permitir agentes customizados com suas próprias ferramentas e prompts. Então podemos:
+
+Registrar uma ferramenta de nome "SQLRunner" que aponta para nosso endpoint de query, e talvez uma "SchemaLookup" para o metadata. Associar essas ferramentas a um agente (ex: um agente do tipo "SQL Assistant" teria permissão para usá-las).
+
+No generateSystemPrompt, incluir instruções do tipo: "Você pode usar as seguintes ferramentas: SQLRunner (executa consultas SQL em um banco de dados Databricks) e SchemaLookup (fornece informações de esquema/tabelas). O formato para solicitar uma ferramenta é .... Isso guia o LLM a produzir aqueles JSONs ou outro formato esperado.
+
+Se usarmos OpenAI com function calling no backend, definimos as functions correspondentes e deixamos o modelo decidir chamá-las. Isso simplificaria a lógica no front (toda orquestração ficaria no backend Python), porém seria uma mudança grande em relação ao que o projeto tem hoje (que parece fazer a orquestração no front/JS).
+
+Atualização do Front-end (chatService.ts): No mínimo, o front-end deve ser alterado para não mais contatar o endpoint de modelo diretamente. Ele passa a enviar as mensagens do usuário ao nosso backend. O backend, por sua vez, pode streamar de volta a resposta do modelo (dá para fazer streaming com FastAPI utilizando StreamingResponse e event-stream SSE). O chatService.ts pode usar EventSource ou uma lib como fetch com ReadableStream para repassar essas mensagens progressivamente ao UI.
+
+Em promptFactory.ts, ao invés de montar todo prompt no front, podemos mover a lógica para o backend ou simplificar: enviar para o backend apenas o state atual da conversa e o ID do agente, e lá gerar o prompt final. Alternativamente, continuar gerando no front mas sem dados sensíveis e mandar já as mensagens formatadas para o backend (depende de onde colocamos a inteligência).
+
+Dado que o objetivo principal aqui é conectar com Databricks e não refatorar completamente o agente, um caminho incremental:
+
+Back-end: adiciona um endpoint /api/chat que basicamente faz o papel de proxy seguro: recebe {messages: [...], agentId: ...} e então faz a chamada para o modelo (Databricks serving endpoint ou OpenAI) usando o token seguro. Retorna a resposta stream. Isso retira o token do front imediatamente (resolvendo a falha 8.1 de segurança).
+
+Front-end: altera chatService.streamChatResponse para chamar /api/chat em vez do endpoint direto. Como efeito colateral, a função generateSystemPrompt no front pode não mais precisar incluir as credenciais e URL (que antes talvez eram usadas para decidir se chama OpenAI ou Databricks). Ela pode focar só em conteúdo.
+
+LLM Agent e ferramentas: Podemos manter o mesmo esquema de WIDGET tokens para SQL. A diferença é que agora, quando o front recebe um widget de consulta, chamará o nosso backend para executá-lo. Isso requer adaptar dashboardService.getDataForSource para usar fetch('/api/query'). De fato, podemos adicionar casos: se sourceName === 'databricks' (ou algum identificador) usar a API. Pelo snippet encontrado, atualmente getDataForSource tinha um switch com fruit_sales retornando dados estáticos. Poderíamos expandir:
+
+export const getDataForSource = async (sourceName: string): Promise<any[]> => {
+    if (sourceName === 'databricks') {
+        const res = await fetch('/api/query', {
+            method: 'POST', 
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ query: currentQuery, warehouseId: currentWh })
+        });
+        const data = await res.json();
+        return data.result ? data.result.data_array : []; // adaptando ao formato real
+    }
+    // ... outros cases ...
+}
+
+
+Aqui, currentQuery seria obtido de algum contexto – possivelmente passaremos a query explicitamente para getDataForSource em vez de só nome. Podemos ajustar a interface para getDataForSource(source, query?). No caso de um widget "Generated SQL", o widget JSON em si carrega o SQL no campo code. Então quem chama getDataForSource pode passar esse código.
+
+3. Agente multi-turn com contexto de workspace: Os metadados do workspace darão ao LLM noção do ambiente. Com isso, o agente pode responder perguntas do tipo "Qual é o esquema da tabela X?" com base nos dados fornecidos, ou "Faça uma query que liste os 10 maiores clientes" sabendo que existe uma tabela customers etc. A qualidade dessas respostas dependerá de como alimentamos o LLM com os metadados:
+
+Poderíamos pré-carregar um resumo das tabelas mais relevantes no prompt. Ex.: "Esquema da tabela customers: id (int), name (string), ...; tabela sales: ...".
+
+Ou tornar interativo: se o usuário mencionar uma tabela que o agente não tem contexto, ele pode responder "Vejo que você mencionou a tabela X. Vou consultar seus campos." e então usar a ferramenta para pegar a info e continuar.
+
+De qualquer forma, a arquitetura agora suporta esse fluxo: temos APIs para obter dados e o LLM pode acioná-las via o front-end (ou via backend se implementarmos função). Isso transforma o app de um visualizador passivo de dashboards com chat overlay em um ambiente interativo onde o LLM pode orquestrar ações no Databricks (consultar dados, trazer informações de esquema, etc.) em linguagem natural. Essa é justamente a visão mencionada de evoluir para uma IDE Generativa (GenIDE) no documento do projeto.
+
+Desenvolvimento Local com Hot-Reload (FastAPI + Vite)
+
+Durante o desenvolvimento, queremos rodar o front React e o back FastAPI simultaneamente, com hot-reload em ambos para acelerar o feedback. Há algumas maneiras de configurar isso:
+
+1. Executar front e back em servidores separados com comunicação via proxy/CORS:
+
+Inicie o backend com Uvicorn em modo reload (por exemplo, uvicorn backend.main:app --reload --port 8000). Ele estará ouvindo na porta 8000.
+
+Inicie o frontend com o Vite dev server (geralmente npm run dev ou vite) que por padrão usa a porta 5173. Em desenvolvimento, o front não precisa ser servido pelo FastAPI; podemos deixá-lo rodando no seu próprio servidor de desenvolvimento.
+
+Para facilitar as requisições do front para o back, configure o proxy do Vite ou CORS:
+
+Proxy: No vite.config.ts, adicione:
+
+export default defineConfig({
+  server: {
+    proxy: {
+      '/api': 'http://localhost:8000'
+    }
+  },
+  // ...restante config
+});
+
+
+Isso faz com que qualquer chamada do front para /api/... seja redirecionada para o servidor FastAPI local. Assim, se no código React fizermos fetch('/api/query', {...}), em dev o Vite intercepta e repassa para http://localhost:8000/api/query. Isso elimina problemas de CORS e mantém os caminhos consistentes entre dev e prod.
+
+CORS: Alternativamente (ou adicionalmente), habilite CORS no FastAPI:
+
+from fastapi.middleware.cors import CORSMiddleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_methods=["*"],
+    allow_headers=["*"]
+)
+
+
+Isso permite que o front dev acesse as APIs do back dev diretamente. Com isso, poderíamos chamar fetch('http://localhost:8000/api/query') se quisermos. Porém, usar o proxy do Vite é mais conveniente pois podemos simplesmente usar caminhos relativos (e evita ter que condicionar URLs no código para dev/prod).
+
+Com ambas as servers rodando, qualquer mudança no código do front recompila automaticamente graças ao Vite (HMR), e qualquer mudança no código Python recarrega o Uvicorn (por causa do --reload).
+
+2. Script unificado (opcional): Para conveniência, podemos criar na raiz do projeto um script que inicie ambos. Por exemplo, adicionar no package.json (no root ou no frontend) um comando usando concurrently:
+
+"scripts": {
+  "dev": "concurrently -k \"uvicorn backend.main:app --reload\" \"npm run dev --prefix frontend\""
+}
+
+
+Isso executa os dois processos em paralelo no mesmo terminal. O flag -k faz kill dos dois se um terminar. Assim, npm run dev inicializa tudo. (Necessita adicionar concurrently nas devDependencies). Em alternativa, um simples script shell também funcionaria.
+
+3. Docker Compose (opcional): Poderíamos usar Docker Compose para desenvolvimento, mas geralmente o reload do front dentro de container é mais lento. De todo modo, seria possível:
+
+Um serviço para o backend: baseado em uma imagem Python, monta o volume do código, instala deps e roda uvicorn --reload.
+
+Um serviço para o frontend: baseado em node, monta o código e roda npm run dev.
+
+Configurar para que o container do front exponha a porta 5173 e o back 8000.
+
+O proxy do Vite continuaria funcionando (apontando para http://backend:8000 dentro do container, mas para fora é transparente via Compose networking).
+
+Este setup containerizado é útil se quisermos aproximar do ambiente de produção ou evitar instalar dependências localmente. Contudo, muitos desenvolvedores preferem rodar nativamente local para ter live reload mais ágil.
+
+4. Build e execução de produção local: Também vale testar o modo produção localmente. Você pode gerar o build do front (npm run build), ele vai criar frontend/dist com os arquivos estáticos minificados. Depois, iniciar o FastAPI normalmente mas montando os static files do dist (conforme mencionado na seção de Arquitetura). Assim, acessar http://localhost:8000 servirá o app completo (UI + API) como será em produção. Esse teste é importante para pegar qualquer problema de caminho ou integração que possa não aparecer no modo dev.
+
+Resumindo a execução local:
+
+Variáveis de ambiente: Coloque seu token e host Databricks em backend/.env. Por exemplo:
+
+DATABRICKS_HOST=https://<seu>.cloud.databricks.com
+DATABRICKS_TOKEN=<seu token>
+DATABRICKS_WAREHOUSE_ID=<ID do warehouse SQL>
+
+
+(Esses valores você obtém no Databricks: token em User Settings > Personal Access Tokens; warehouse ID na página do SQL Warehouse).
+
+Instalar dependências: pip install -r backend/requirements.txt e npm install no frontend.
+
+Rodar backend: uvicorn backend.main:app --reload --port 8000.
+
+Rodar frontend: npm run dev (porta 5173 por padrão).
+
+Acessar UI: Abra http://localhost:5173 no navegador. O app deverá carregar e conseguir chamar as APIs (via proxy definido). Você pode testar o chat e as funções – o terminal do uvicorn mostrará logs das chamadas /api feitas.
+
+Feito isso, você tem o ambiente interativo. Edite componentes React: verá HMR atualizando a página. Edite uma rota Python: uvicorn reinicia e você pode testar de novo rapidamente.
+
+Dica: No VSCode ou outro editor, considere configurar um Launch Task que inicia ambos serviços, ou use dois terminais side-by-side. A produtividade aumenta muito com o hot-reload nos dois lados.
+
+Conclusão e Recapitulando
+
+Com este plano, cobrimos todos os pontos solicitados:
+
+Arquitetura: front React + Vite e back FastAPI integrados, deployáveis como único serviço (e apontamos como manter estáticos juntos no FastAPI) – seguindo o padrão BFF para segurança.
+
+Organização de arquivos: sugerimos um esqueleto de projeto separando frontend e backend, facilitando manutenção.
+
+Endpoints FastAPI (SQL e DBFS): fornecemos exemplos de implementação para executar queries no SQL Warehouse
+docs.pinkfish.ai
+ e ler/escrever arquivos via DBFS (com uso devido de base64)
+stackoverflow.com
+docs.databricks.com
+.
+
+Credenciais seguras: recomendamos uso de env/.env e Secrets do Databricks Apps, evitando exposição de token no cliente
+docs.databricks.com
+.
+
+Chamada React aos endpoints: discutimos como o front utilizará fetch (ou similar) nos serviços, exemplificando chamadas nas funções getDataForSource e via fetch direto. Essas chamadas substituem as que antes iam direto ao Databricks, agora indo ao nosso backend (/api/...).
+
+Proteção do backend: falamos de CORS, autenticação, validação de inputs, rate limiting e restrição de paths, assegurando que somente usuários autorizados e operações seguras ocorram.
+
+LLM Agent integration: explicamos como expor os metadados do workspace (schemas, tabelas) e permitir que o agente LLM use ferramentas (como executar SQL via widget ou função). Também cobrimos a refatoração necessária em chatService.ts e promptFactory.ts para se alinharem ao novo backend (removendo token do front, usando ferramentas do back, e possivelmente ampliando o prompt com dados de esquema).
+
+Dev local hot-reload: fornecemos passos concretos para rodar front e back em paralelo, incluindo configurações de proxy do Vite e dicas de scripts ou Docker Compose, garantindo uma experiência fluida durante o desenvolvimento.
+
+Esse plano, portanto, deve guiar a implementação das funcionalidades desejadas de forma estruturada e segura, transformando o projeto em uma solução robusta de dashboard + chat inteligente sobre o lakehouse do Databricks. Boa implementação!
