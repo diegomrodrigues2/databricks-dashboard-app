@@ -314,6 +314,7 @@ interface ChatContextType {
   currentSessionId: string | null;
   activeAgentId: string;
   sendMessage: (content: string) => Promise<void>;
+  startNewSessionWithContext: (content: string) => Promise<void>;
   submitDecision: (inquiryId: string, value: any) => Promise<void>;
   submitCodeExecutionResult: (code: string, result: any) => Promise<void>;
   clearMessages: () => void;
@@ -711,6 +712,24 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
     dispatch({ type: 'CLEAR_MESSAGES' });
   }, []);
 
+  const startNewSessionWithContext = useCallback(async (content: string) => {
+      const newSession = createSession();
+      dispatch({ type: 'SET_SESSION', payload: newSession });
+
+      const userMessage: TreeMessage = {
+          id: `${Date.now()}-user`,
+          role: 'user',
+          content,
+          timestamp: new Date(),
+          parentId: null,
+          childrenIds: []
+      };
+
+      dispatch({ type: 'SEND_MESSAGE', payload: userMessage });
+      
+      await processResponseLoop([userMessage]);
+  }, [state.activeAgentId]);
+
   const value = useMemo(
     () => ({
       isChatOpen: state.isChatOpen,
@@ -721,6 +740,7 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
       currentSessionId: state.currentSessionId,
       activeAgentId: state.activeAgentId,
       sendMessage,
+      startNewSessionWithContext,
       submitDecision,
       submitCodeExecutionResult,
       clearMessages,
@@ -734,7 +754,7 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
       switchAgent,
       addSystemMessage
     }),
-    [state.isChatOpen, messages, state.status, state.activeToolCallId, state.currentSessionId, state.activeAgentId, toggleChat, sendMessage, submitDecision, clearMessages, loadSession, createNewSession, renameSession, deleteSession, clearAllHistory, navigateBranch, editUserMessage, switchAgent, addSystemMessage]
+    [state.isChatOpen, messages, state.status, state.activeToolCallId, state.currentSessionId, state.activeAgentId, toggleChat, sendMessage, startNewSessionWithContext, submitDecision, clearMessages, loadSession, createNewSession, renameSession, deleteSession, clearAllHistory, navigateBranch, editUserMessage, switchAgent, addSystemMessage]
   );
 
   return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>;

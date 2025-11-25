@@ -10,6 +10,7 @@ import { ChevronDownIcon } from './icons/ChevronDownIcon';
 import { PlusCircleIcon } from './icons/PlusCircleIcon';
 import { PencilIcon } from './icons/PencilIcon';
 import { TrashIcon } from './icons/TrashIcon';
+import { DatabaseIcon } from './icons/DatabaseIcon';
 
 interface SidebarProps {
   currentPage: Page;
@@ -323,7 +324,7 @@ const Sidebar: React.FC<SidebarProps> = ({ currentPage, currentDashboardId, onNa
             {/* Editor Button */}
             <button
               onClick={() => onNavigate('editor')}
-              className={`flex items-center p-3 mb-4 rounded-lg cursor-pointer transition-colors duration-200 w-full border ${
+              className={`flex items-center p-3 mb-2 rounded-lg cursor-pointer transition-colors duration-200 w-full border ${
                   currentPage === 'editor' 
                     ? 'bg-gray-700 text-white border-blue-500' 
                     : 'bg-gray-800 text-gray-300 border-gray-700 hover:bg-gray-700 hover:border-gray-600'
@@ -332,6 +333,20 @@ const Sidebar: React.FC<SidebarProps> = ({ currentPage, currentDashboardId, onNa
             >
               <PencilIcon className="w-5 h-5 shrink-0" />
               {!isCollapsed && <span className="text-sm font-medium ml-3">Editor</span>}
+            </button>
+
+            {/* Database Explorer Button */}
+            <button
+              onClick={() => onNavigate('explorer')}
+              className={`flex items-center p-3 mb-4 rounded-lg cursor-pointer transition-colors duration-200 w-full border ${
+                  currentPage === 'explorer' 
+                    ? 'bg-gray-700 text-white border-blue-500' 
+                    : 'bg-gray-800 text-gray-300 border-gray-700 hover:bg-gray-700 hover:border-gray-600'
+              } ${isCollapsed ? 'justify-center' : ''}`}
+              title="Database Explorer"
+            >
+              <DatabaseIcon className="w-5 h-5 shrink-0" />
+              {!isCollapsed && <span className="text-sm font-medium ml-3">Explorer</span>}
             </button>
 
           {!isCollapsed && <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Dashboards</h3>}

@@ -6,7 +6,11 @@ import SessionSetup from './SessionSetup';
 import { useChat } from '../../hooks/useChat';
 import { Message, TreeMessage } from '../../types';
 
-const ChatWindow: React.FC = () => {
+interface ChatWindowProps {
+  hideHeader?: boolean;
+}
+
+const ChatWindow: React.FC<ChatWindowProps> = ({ hideHeader = false }) => {
   const { messages, sendMessage, activeAgentId } = useChat();
   
   // Simple heuristic: If there are no messages, show setup.
@@ -68,7 +72,7 @@ const ChatWindow: React.FC = () => {
 
   return (
     <div className="flex flex-col h-full bg-gray-900">
-      <ChatHeader />
+      {!hideHeader && <ChatHeader />}
       
       {showLobby ? (
           <div className="flex-grow overflow-hidden">

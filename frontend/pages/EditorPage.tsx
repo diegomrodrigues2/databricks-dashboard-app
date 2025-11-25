@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
 import Editor from '@monaco-editor/react';
-import { getFileContent, saveFileContent, createFile, validateFilePath, FileItem } from '../services/fileService';
+import { getFileContent, saveFileContent, createFile, FileItem } from '../services/fileService';
 import { FileBrowser } from '../components/editor/FileBrowser';
 import { useChat } from '../hooks/useChat';
+import ChatWindow from '../components/chat/ChatWindow';
+import MarkdownRenderer from '../components/chat/MarkdownRenderer';
 import type { Page } from '../types';
 import { DocumentTextIcon } from '../components/icons/DocumentTextIcon';
-import { PlusCircleIcon } from '../components/icons/PlusCircleIcon';
 import { SaveIcon } from '../components/icons/SaveIcon';
 import { ChevronDownIcon } from '../components/icons/ChevronDownIcon';
 import { CheckIcon } from '../components/icons/CheckIcon';
@@ -17,17 +18,14 @@ interface EditorPageProps {
 const EditorPage: React.FC<EditorPageProps> = ({ onNavigate }) => {
     const [currentFilePath, setCurrentFilePath] = useState<string | null>(null);
     const [fileContent, setFileContent] = useState<string>('');
+    const [viewMode, setViewMode] = useState<'EDITOR' | 'CHAT' | 'PREVIEW'>('EDITOR');
     const [isLoading, setIsLoading] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
     const [isDirty, setIsDirty] = useState(false);
-    const [showNewFileModal, setShowNewFileModal] = useState(false);
-    const [newFileName, setNewFileName] = useState('');
-    const [newFileParentDir, setNewFileParentDir] = useState('dbfs:/FileStore');
     const [isCreating, setIsCreating] = useState(false);
-    const [createError, setCreateError] = useState<string | null>(null);
     const [refreshTrigger, setRefreshTrigger] = useState(0);
     const [showActionMenu, setShowActionMenu] = useState(false);
-    const { sendMessage } = useChat();
+    const { sendMessage, startNewSessionWithContext } = useChat();
 
     const handleFileSelect = async (file: FileItem) => {
         if (isDirty) {
@@ -45,6 +43,11 @@ const EditorPage: React.FC<EditorPageProps> = ({ onNavigate }) => {
             const content = await getFileContent(file.path);
             setFileContent(content);
             setCurrentFilePath(file.path);
+            if (file.path.endsWith('.md')) {
+                setViewMode('PREVIEW');
+            } else {
+                setViewMode('EDITOR');
+            }
             setIsDirty(false);
         } catch (error) {
             console.error("Failed to load file content", error);
@@ -77,71 +80,6 @@ const EditorPage: React.FC<EditorPageProps> = ({ onNavigate }) => {
         }
     };
 
-    const handleNewFileClick = () => {
-        setNewFileName('');
-        setNewFileParentDir('dbfs:/FileStore');
-        setCreateError(null);
-        setShowNewFileModal(true);
-    };
-
-    const handleCreateFile = async () => {
-        if (!newFileName.trim()) {
-            setCreateError('File name cannot be empty');
-            return;
-        }
-
-        // Construct full path
-        const parentPath = newFileParentDir.endsWith('/') 
-            ? newFileParentDir.slice(0, -1) 
-            : newFileParentDir;
-        const fullPath = `${parentPath}/${newFileName.trim()}`;
-
-        // Validate path
-        const validation = validateFilePath(fullPath);
-        if (!validation.valid) {
-            setCreateError(validation.error || 'Invalid file path');
-            return;
-        }
-
-        setIsCreating(true);
-        setCreateError(null);
-        try {
-            await createFile(fullPath, '');
-            
-            // Create a FileItem to pass to handleFileSelect
-            const newFile: FileItem = {
-                name: newFileName.trim(),
-                path: fullPath,
-                type: 'file'
-            };
-            
-            // Trigger file browser refresh
-            setRefreshTrigger(prev => prev + 1);
-            
-            // Open the new file in the editor
-            await handleFileSelect(newFile);
-            
-            // Close modal
-            setShowNewFileModal(false);
-            setNewFileName('');
-        } catch (err) {
-            const errorMessage = err instanceof Error ? err.message : 'Failed to create file';
-            setCreateError(errorMessage);
-            console.error('Failed to create file', err);
-        } finally {
-            setIsCreating(false);
-        }
-    };
-
-    const handleModalKeyDown = (e: React.KeyboardEvent) => {
-        if (e.key === 'Enter' && !isCreating) {
-            handleCreateFile();
-        } else if (e.key === 'Escape') {
-            setShowNewFileModal(false);
-            setCreateError(null);
-        }
-    };
-
     const getLanguage = (path: string) => {
         if (path.endsWith('.sql')) return 'sql';
         if (path.endsWith('.md')) return 'markdown';
@@ -149,19 +87,19 @@ const EditorPage: React.FC<EditorPageProps> = ({ onNavigate }) => {
     };
 
     const handleChatWithFile = async () => {
-        if (!currentFilePath || !fileContent || !onNavigate) return;
+        if (!currentFilePath || !fileContent) return;
         
         const message = `Context: ${currentFilePath}\n\n\`\`\`\n${fileContent}\n\`\`\`\n\nI want to discuss this file.`;
-        sendMessage(message);
-        onNavigate('chat');
+        startNewSessionWithContext(message);
+        setViewMode('CHAT');
     };
 
     const handleTranslateFile = async () => {
-        if (!currentFilePath || !fileContent || !onNavigate) return;
+        if (!currentFilePath || !fileContent) return;
 
         const message = `Context: ${currentFilePath}\n\n\`\`\`\n${fileContent}\n\`\`\`\n\nPlease translate this SQL Server code to Databricks SQL.`;
         sendMessage(message);
-        onNavigate('chat');
+        setViewMode('CHAT');
     };
 
     const handleExplainFile = async () => {
@@ -241,17 +179,26 @@ const EditorPage: React.FC<EditorPageProps> = ({ onNavigate }) => {
                     </div>
                     
                     <div className="flex items-center gap-2">
-                        <button
-                            onClick={handleNewFileClick}
-                            className="flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-colors bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-700 hover:border-gray-600"
-                            title="Create New File"
-                        >
-                            <PlusCircleIcon className="w-4 h-4" />
-                            <span>New File</span>
-                        </button>
-                        
-                        <div className="h-6 w-px bg-gray-700 mx-1" />
-
+                        {currentFilePath && currentFilePath.endsWith('.md') && (
+                            <button
+                                onClick={() => setViewMode(viewMode === 'PREVIEW' ? 'EDITOR' : 'PREVIEW')}
+                                className="flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-700 hover:border-gray-600 transition-colors"
+                            >
+                                {viewMode === 'PREVIEW' ? (
+                                    <>
+                                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
+                                            <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM6.75 9.25a.75.75 0 000 1.5h4.59l-2.1 2.1a.75.75 0 101.06 1.06l3.38-3.38a.75.75 0 000-1.06l-3.38-3.38a.75.75 0 10-1.06 1.06l2.1 2.1H6.75z" clipRule="evenodd" />
+                                        </svg>
+                                        <span>Show Code</span>
+                                    </>
+                                ) : (
+                                    <>
+                                        <DocumentTextIcon className="w-4 h-4" />
+                                        <span>Show Preview</span>
+                                    </>
+                                )}
+                            </button>
+                        )}
                         <button
                             onClick={handleSave}
                             disabled={!currentFilePath || isSaving}
@@ -299,6 +246,12 @@ const EditorPage: React.FC<EditorPageProps> = ({ onNavigate }) => {
                                         Chat with file
                                     </button>
                                     <button
+                                        onClick={() => { setShowActionMenu(false); setViewMode('EDITOR'); }}
+                                        className="w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-700 hover:text-white flex items-center gap-2"
+                                    >
+                                        Show Code
+                                    </button>
+                                    <button
                                         onClick={() => { setShowActionMenu(false); handleExplainFile(); }}
                                         className="w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-700 hover:text-white flex items-center gap-2"
                                     >
@@ -321,6 +274,14 @@ const EditorPage: React.FC<EditorPageProps> = ({ onNavigate }) => {
                     {isLoading ? (
                         <div className="absolute inset-0 flex items-center justify-center bg-gray-900 z-10 opacity-80">
                             <span>Loading...</span>
+                        </div>
+                    ) : viewMode === 'CHAT' ? (
+                        <ChatWindow hideHeader={true} />
+                    ) : viewMode === 'PREVIEW' ? (
+                        <div className="h-full overflow-y-auto p-8 bg-[#1e1e1e]">
+                            <div className="max-w-3xl mx-auto">
+                                <MarkdownRenderer content={fileContent} />
+                            </div>
                         </div>
                     ) : currentFilePath ? (
                         <Editor
@@ -345,83 +306,6 @@ const EditorPage: React.FC<EditorPageProps> = ({ onNavigate }) => {
                     )}
                 </div>
             </div>
-
-            {/* New File Modal */}
-            {showNewFileModal && (
-                <div 
-                    className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
-                    onClick={() => {
-                        if (!isCreating) {
-                            setShowNewFileModal(false);
-                            setCreateError(null);
-                        }
-                    }}
-                >
-                    <div 
-                        className="bg-gray-800 border border-gray-700 rounded-lg p-6 w-96 max-w-[90vw]"
-                        onClick={(e) => e.stopPropagation()}
-                        onKeyDown={handleModalKeyDown}
-                    >
-                        <h2 className="text-lg font-semibold text-white mb-4">Create New File</h2>
-                        
-                        <div className="mb-4">
-                            <label className="block text-sm text-gray-400 mb-2">Parent Directory</label>
-                            <input
-                                type="text"
-                                value={newFileParentDir}
-                                onChange={(e) => setNewFileParentDir(e.target.value)}
-                                className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-blue-500"
-                                placeholder="dbfs:/FileStore"
-                                disabled={isCreating}
-                            />
-                        </div>
-
-                        <div className="mb-4">
-                            <label className="block text-sm text-gray-400 mb-2">File Name</label>
-                            <input
-                                type="text"
-                                value={newFileName}
-                                onChange={(e) => {
-                                    setNewFileName(e.target.value);
-                                    setCreateError(null);
-                                }}
-                                className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-blue-500"
-                                placeholder="example.sql"
-                                autoFocus
-                                disabled={isCreating}
-                                onKeyDown={handleModalKeyDown}
-                            />
-                            <p className="text-xs text-gray-500 mt-1">Enter filename with extension (e.g., query.sql, script.py)</p>
-                        </div>
-
-                        {createError && (
-                            <div className="mb-4 p-2 bg-red-900/30 border border-red-700 rounded text-red-400 text-sm">
-                                {createError}
-                            </div>
-                        )}
-
-                        <div className="flex justify-end gap-2">
-                            <button
-                                onClick={() => {
-                                    setShowNewFileModal(false);
-                                    setCreateError(null);
-                                }}
-                                disabled={isCreating}
-                                className="px-4 py-2 text-sm text-gray-400 hover:text-white disabled:opacity-50"
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                onClick={handleCreateFile}
-                                disabled={isCreating || !newFileName.trim()}
-                                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded disabled:opacity-50 disabled:cursor-not-allowed"
-                            >
-                                {isCreating ? 'Creating...' : 'Create'}
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
         </div>
     );
 };

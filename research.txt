@@ -1,205 +1,773 @@
-Plano técnico para adicionar seção de Editor de Texto no aplicativo
-Visão Geral e Objetivos
 
-A proposta é introduzir uma nova seção "Editor" no aplicativo React + FastAPI, destinada a leitura e escrita de arquivos de texto (principalmente arquivos .sql e .md) no Databricks File System (DBFS). Essa seção permitirá que engenheiros de dados visualizem, editem e salvem scripts SQL e documentos Markdown diretamente no DBFS, dentro de uma pasta pré-definida (ou configurável). Todo acesso ao DBFS continuará sendo mediado pelo backend FastAPI (via API REST do Databricks), garantindo segurança – o front-end nunca acessa o Databricks diretamente. Em resumo, o Editor proporcionará funcionalidade de IDE leve no contexto do app, integrado também com o componente de chat/LLM para facilitar salvar trechos de código gerados pela IA. A seguir detalhamos a arquitetura, componentes, fluxos de comunicação e cuidados de segurança e UX para implementar essa funcionalidade.
-
-Componentes do Frontend (React) para o Editor
-
-No front-end em React (usando Vite), serão criados novos componentes e páginas para compor a seção de Editor. A estrutura modular atual (com componentes em src/components e páginas em src/pages) será estendida para incluir o Editor. Os principais componentes propostos são:
-
-Página Editor (EditorPage): Componente de página principal (pode ser um novo entry em pages/EditorPage.tsx) responsável por renderizar a interface de edição. Este componente será ativado quando o usuário navegar para a seção "Editor" (por exemplo, via menu). Deve fazer parte do roteamento de páginas do app – por exemplo, adicionando 'editor' ao tipo Page e incluindo um case no switch do App.tsx para renderizar <EditorPage> quando currentPage === 'editor'. Também adicionaremos um item "Editor" no menu de navegação (provavelmente dentro de MainLayout) para o usuário acessar essa página.
-
-Navegador de Arquivos (FileBrowser/FileTree): Componente opcional (mas recomendado) para listar os arquivos disponíveis na pasta designada do DBFS. Pode ser uma árvore de diretórios ou uma lista simples, dependendo da necessidade. Se implementado, ao montar o EditorPage o front-end chamará um endpoint de listagem (e.g. GET /api/listdir?path=<pasta_base>) para obter os nomes dos arquivos e subdiretórios. O componente exibirá essa lista (por exemplo, como uma sidebar lateral) para o usuário escolher o arquivo desejado. Poderá mostrar ícones diferentes para pastas e arquivos, permitir expandir subdiretórios, etc., embora uma única pasta fixa simplifique para uma lista simples de arquivos .sql/.md. Ao clicar em um arquivo, o EditorPage irá carregar seu conteúdo.
-
-Editor de Código (CodeEditor): Componente principal que fornece a área de edição de texto com syntax highlighting. Aqui, utilizaríamos uma biblioteca adequada, como Monaco Editor ou CodeMirror, integradas ao React. Essas bibliotecas oferecem realce de sintaxe para múltiplas linguagens (incluindo SQL e Markdown) e recursos como tema escuro, numeração de linhas, auto-completar básico, etc. O Monaco Editor, por exemplo, suporta mais de 50 linguagens e diversos temas, com facilidade de configuração de propriedades como altura, linguagem, tema e eventos onChange
-blog.logrocket.com
-blog.logrocket.com
-. Já o React CodeMirror também permite múltiplos modos de linguagem e temas, embora exija adicionar módulos de linguagem/tema separadamente
-blog.logrocket.com
-. Dado o público alvo (engenheiros de dados) e a necessidade de editar SQL/Markdown, o Monaco Editor integrado via @monaco-editor/react é uma ótima escolha pela familiaridade (é o editor do VSCode) e recursos prontos (destacando SQL, Markdown, JSON, etc). Alternativamente, poderíamos usar CodeMirror (@uiw/react-codemirror) caso se deseje um bundle menor, mas com um pouco mais de configuração. Em ambos os casos, configuraremos o editor para:
-
-Linguagem Dinâmica: escolher automaticamente a linguagem conforme a extensão do arquivo selecionado (ex.: .sql -> linguagem SQL, .md -> Markdown).
-
-Tema: preferencialmente um tema escuro compatível com o restante do app (por exemplo, Monaco com "vs-dark" ou CodeMirror com tema estilo VSCode
-blog.logrocket.com
-blog.logrocket.com
-).
-
-Recursos de Edição: ativar numeração de linhas, indentação por tab, highlight de sintaxe, colchetes correspondentes, etc., já disponíveis por padrão nessas libs. Não é necessário implementar funcionalidades avançadas como execução de código no editor – o foco é edição de texto puro.
-
-Barra de Ações do Editor: Podemos incluir um pequeno header ou footer dentro do EditorPage com ações como "Salvar". Por exemplo, um botão Salvar (💾) que o usuário pode clicar para salvar manualmente as alterações. Também pode mostrar o nome do arquivo aberto e um indicador de status (ex.: "Salvo", "Alterações não salvas..."). Esse componente pode ser simplesmente parte do JSX do EditorPage (não precisa ser separado a menos que queira reutilizar). Se necessário, incluir também um botão "Novo Arquivo" para criar um arquivo em branco (ver detalhes mais adiante).
-
-Serviço de Editor (EditorService): Assim como existem chatService.ts e dashboardService.ts para comunicação com backend, podemos criar um módulo de serviço (por ex. src/services/fileService.ts ou incorporar no existente dashboardService.ts se apropriado) com funções para chamar as APIs de arquivos. Exemplos: getFileContent(path) faz fetch em GET /api/files?path=... e retorna o conteúdo; saveFileContent(path, content) faz fetch POST para /api/files enviando JSON. Encapsular essas chamadas facilita reutilizar e manejar erros/promise de forma centralizada.
-
-Com esses componentes, a hierarquia da página Editor seria algo como: MainLayout (contém menu de navegação) -> EditorPage (contém FileBrowser + CodeEditor + Barra de Ações). O estado da seleção de arquivo atual e conteúdo pode residir em EditorPage (via useState hooks). Por exemplo, EditorPage mantém currentFilePath e fileContent. Quando currentFilePath muda (usuário selecionou novo arquivo), o efeito useEffect chama o serviço para carregar conteúdo. O conteúdo carregado é então passado como value para o CodeEditor. Conforme o usuário edita, podemos atualizar fileContent estado local e acionar auto-save via outro hook.
-
-Fluxo de Interação do Editor (Frontend <-> Backend)
-
-A interação entre o front-end React e o back-end FastAPI para o Editor seguirá um fluxo bem definido, utilizando endpoints REST já planejados para acesso ao DBFS. Abaixo descrevemos um fluxo típico de uso do Editor e como os componentes e APIs interagem:
-
-Abertura do Editor: Quando o usuário navega para a seção Editor (clicando no menu "Editor"), o componente EditorPage é montado. Neste momento:
-
-(Opcional) O EditorPage chama o endpoint GET /api/listdir?path=<base_dir> para obter a listagem de arquivos disponíveis no diretório base configurado no DBFS. O backend responde com JSON contendo os nomes de arquivos e subdiretórios. O front-end então popula o componente FileBrowser (exibindo, por exemplo, uma lista de arquivos .sql e .md encontrados).
-
-Em alternativa, se não implementarmos o listdir de imediato, poderíamos ter uma constante ou config com alguns arquivos conhecidos ou exigir input manual do path. No entanto, para melhor UX, a listagem automática é preferível.
-
-Seleção de Arquivo: O usuário seleciona um arquivo existente (clicando no nome na árvore/lista de arquivos). Imediatamente:
-
-O front-end chama GET /api/files?path=<caminho_completo_do_arquivo> para ler o conteúdo do arquivo do DBFS. Aqui <caminho_completo_do_arquivo> seria construído combinando o diretório base configurado e o nome do arquivo (ex: base dbfs:/FileStore/appdata/meuapp/ + queries/projetoX.sql). O backend FastAPI, por sua vez, usa a API dbfs/read do Databricks para ler o arquivo e devolver o conteúdo codificado em Base64, que é então decodificado para texto puro antes de retornar ao front-end. Se o arquivo não existir ou der erro, o backend retornará erro HTTP apropriado (404, 403, etc).
-
-Ao receber a resposta, o EditorPage atualiza o estado fileContent com o texto do arquivo. O componente CodeEditor exibe esse conteúdo com destaque de sintaxe (por ex., se a extensão é .sql, setamos language="sql" no Monaco; se .md, language="markdown").
-
-O nome do arquivo atual também é armazenado (currentFilePath) para uso em salvamento.
-
-Edição do Conteúdo: O usuário faz alterações no texto dentro do CodeEditor. O componente de edição deve expor um evento onChange (Monaco e CodeMirror permitem isso) que podemos usar para capturar o texto modificado:
-
-A cada mudança, atualizamos o estado fileContent (isso já pode ser automático se o CodeEditor for controlado via value e onChange).
-
-Implementamos um mecanismo de Auto-Save com debounce: em vez de enviar a cada pressionar de tecla, configuramos um temporizador. Por exemplo, usando setTimeout ou lodash.debounce para chamar a função de salvar 2 segundos após a última edição. Enquanto o usuário continua digitando, o timer reseta. Quando há 2s de inatividade após uma edição, acionamos a gravação automática.
-
-Paralelamente, oferecemos o botão "Salvar" manual. Se clicado, este cancela qualquer timer pendente e força o salvamento imediato.
-
-Salvamento do Arquivo: Seja pelo auto-save ou pelo clique no botão Salvar, a ação de salvar envolve:
-
-Chamar POST /api/files enviando no corpo um JSON com o caminho do arquivo e o conteúdo de texto atual (por exemplo { "path": "<caminho_completo_do_arquivo>", "content": "<texto_atualizado>" }). O backend então utiliza a API dbfs/put do Databricks para gravar o conteúdo. Conforme implementado, nosso endpoint definirá overwrite=true para atualizar ou criar o arquivo. O conteúdo é convertido para Base64 e enviado à API do Databricks (observando o limite de ~1 MB por chamada). Em caso de sucesso, retorna uma resposta 200 com uma mensagem de confirmação (por exemplo "Arquivo salvo com sucesso.").
-
-O front-end, ao receber sucesso, pode indicar visualmente que as alterações foram salvas – por exemplo, exibindo um pequeno indicador "✅ Salvo" próximo ao nome do arquivo ou uma notificação toast. Também podemos resetar um flag de “dirty” (modificado) do editor até que haja novas edições.
-
-Se ocorrer erro no salvamento (ex: falta de permissão, espaço insuficiente ou falha de rede), o front exibirá uma mensagem de erro ao usuário (talvez via modal ou toast vermelho) e manterá o conteúdo na memória para não perdê-lo. O usuário poderia tentar salvar novamente.
-
-Criação de Novo Arquivo: Se desejado, o Editor pode suportar criação de arquivos .sql/.md novos:
-
-Adicionar um botão "Novo Arquivo" na interface do Editor. Ao clicar, pode-se abrir um prompt para o usuário digitar o nome do novo arquivo (ex: "novo_script.sql" ou "README.md"). Podemos restringir para forçar incluir extensão válida (.sql ou .md) automaticamente se o usuário não colocar.
-
-Uma vez definido o nome, o EditorPage limpa o conteúdo atual (editor em branco) e define currentFilePath para o novo caminho. O usuário edita o conteúdo e, ao salvar, a chamada POST /api/files com esse caminho resultará em criar o arquivo no DBFS (já que overwrite=True também cobre o caso de arquivo inexistente, criando-o).
-
-É importante talvez sinalizar se um arquivo já existe para evitar sobreescrita acidental: poderíamos fazer o backend verificar existência se overwrite for um problema, mas conforme escolha de design, estamos permitindo sobrescrever sempre por simplicidade. Em UX, se quisermos mais segurança, ao tentar salvar um arquivo novo cujo nome já exista no diretório, podemos alertar "Arquivo já existe, deseja substituir?" antes de prosseguir.
-
-Fechamento ou Mudança de Arquivo: Se o usuário sai do Editor ou seleciona outro arquivo enquanto há mudanças não salvas, devemos cuidar para não perder dados:
-
-Graças ao auto-save, idealmente todas mudanças já terão sido gravadas após 2s de o usuário parar de digitar. Ainda assim, por segurança, podemos implementar um aviso "Você tem alterações não salvas, tem certeza que deseja trocar de arquivo ou sair?" se detectarmos conteúdo divergente que não foi salvo. Esse comparativo pode ser feito mantendo uma cópia do último conteúdo salvo e comparando com o estado atual.
-
-Outra abordagem é simplesmente salvar imediatamente ao trocar de arquivo (trigger auto-save imediata) e prosseguir.
-
-Este fluxo garante que atendamos aos requisitos de leitura/escrita de arquivos no DBFS (Requisito 1 e 3) de forma intuitiva. Resumidamente, o componente de editor de texto abre um arquivo via GET e salva via POST nos endpoints do FastAPI, conforme descrito, mantendo toda a lógica de DBFS no servidor e a UI responsiva para o usuário.
-
-Backend FastAPI – Endpoints de Leitura/Escrita no DBFS
-
-No backend, expandiremos (ou utilizaremos) os endpoints FastAPI para manipulação de arquivos no DBFS. Segundo o contexto, já havia uma intenção de implementar routes_files.py com essas rotas. Os principais endpoints/configurações serão:
-
-GET /api/files: Lê o conteúdo de um arquivo no DBFS. Recebe o caminho do arquivo via query parameter (por exemplo, GET /api/files?path=dbfs:/FileStore/appdata/meuapp/arquivo.sql). Internamente, faz uma requisição HTTP para GET /api/2.0/dbfs/read na API do Databricks, passando o caminho fornecido. A resposta do Databricks vem em JSON contendo os bytes lidos e o conteúdo codificado em Base64. O FastAPI então decodifica esse Base64 para obter o texto original (assumindo UTF-8 para arquivos .sql/.md) e devolve um JSON como {"path": "<path>", "content": "<texto_do_arquivo>"}. Em caso de erro (arquivo não encontrado, acesso negado, etc.), retorna o status HTTP e mensagem de erro apropriadamente (utilizando HTTPException).
-
-POST /api/files: Escreve conteúdo em um arquivo no DBFS. Espera-se um corpo JSON com {"path": "<caminho>", "content": "<novo_conteúdo_texto>"}. O handler converte o conteúdo de texto para Base64 (porque a API do Databricks espera o campo contents em Base64) e então faz uma requisição POST /api/2.0/dbfs/put para o Databricks, incluindo overwrite=true no payload para permitir criar/sobrescrever o arquivo. Supondo sucesso (status 200), retorna ao front um JSON confirmando, por ex: {"message": "Arquivo salvo com sucesso", "path": "<path>"}. Erros da API do Databricks (ex: payload grande demais, token inválido) resultam em HTTPException com código apropriado para que o front possa exibir erro.
-
-(Opcional) GET /api/listdir: Endpoint adicional para listar arquivos em um diretório. Por exemplo GET /api/listdir?path=dbfs:/FileStore/appdata/meuapp/. Se implementado, internamente chamará GET /api/2.0/dbfs/list do Databricks, que retorna nomes de arquivos e diretórios dentro do caminho especificado. O FastAPI então formata isso como uma lista de itens (por exemplo {"files": [{"name": "foo.sql", "type": "file"}, {"name": "docs", "type": "directory"}, ...]}). Esse endpoint facilita popular a árvore de arquivos no front-end e navegar em subpastas. Caso o diretório seja muito grande ou o path inválido, retornará erro ou lista parcial conforme necessidade.
-
-Todos esses endpoints aproveitam as credenciais (host do workspace e token de acesso) configurados no backend para chamar a API do Databricks. Importante: O token nunca é exposto ao cliente – o FastAPI age como intermediário seguro. Certifique-se de carregar essas credenciais de modo seguro (variáveis de ambiente ou Databricks Secrets) e não colocá-las em código-fonte ou front-end, conforme já planejado no projeto.
-
-Também precisamos estar atentos ao tamanho dos arquivos: a API dbfs/put tem um limite de ~1 MB para conteúdo inline. Como se trata de arquivos de texto (scripts SQL ou Markdown de configuração/documentação), geralmente isso é suficiente. Se futuramente for necessário suportar arquivos maiores, teríamos que implementar o fluxo multipart (DBFS create/add-block/close), mas isso adicionaria bastante complexidade – portanto, neste plano assumimos arquivos pequenos/médios (< 1 MB) para manter a implementação simples.
-
-Os endpoints devem ser adicionados às rotas do FastAPI (provavelmente dentro de routes_files.py). As funções exemplificadas acima mostram a essência do código. Já que se mencionou que parte disso está “iniciado no código”, é verificar e completar quaisquer trechos faltantes. Por exemplo, garantir que DATABRICKS_HOST e DATABRICKS_TOKEN estejam sendo lidos do config (os.getenv ou app.core.config) e que as exceções sejam tratadas. Após implementar, incluir essas rotas no app FastAPI (montá-las sob prefixo /api se não estiverem automaticamente, dependendo da estrutura do projeto).
-
-Integração com o Componente de Chat (LLM)
-
-Um dos diferenciais será a integração entre o Editor de Texto e o chat com LLM já existente no front-end (componentes em components/chat/*). Essa integração visa permitir que conteúdos gerados ou solicitados via chat possam ser facilmente salvos como arquivos no DBFS, atendendo ao requisito (4). Abaixo estão propostas de como integrar os dois módulos:
-
-Botão "Salvar como arquivo" em respostas do LLM: Quando o assistente de IA (LLM) fornecer uma resposta contendo código ou texto que o usuário deseje salvar, a interface deve oferecer um atalho. Por exemplo, se o ChatGPT retornar um bloco de código SQL ou um trecho Markdown, o componente de renderização de markdown (provavelmente MarkdownRenderer ou similar) pode adicionar um pequeno botão de ação próximo ao bloco de código ou no menu da mensagem. Esse botão, talvez representado por um ícone de disquete (💾) ou texto "Salvar no DBFS", ao ser clicado:
-
-Abre um diálogo para o usuário especificar o nome do arquivo e pasta (com um default possivelmente preenchido, e.g. "resposta.sql" ou "nota.md"). Como estamos restringindo a uma pasta base, podemos apenas pedir um nome simples e internamente o salvaremos naquela pasta.
-
-Em seguida, o front-end chama o serviço de arquivos (função de save) passando o conteúdo da resposta do LLM. Esse conteúdo já está disponível no front (o markdown renderer tem a string do código). Assim, podemos reutilizar a chamada POST /api/files para criar o arquivo. O backend salvará o conteúdo no DBFS e retornará sucesso.
-
-Após salvar, podemos notificar o usuário ("Arquivo nome.sql salvo com sucesso!"). Também podemos oferecer a opção de “Abrir no Editor”: ou seja, logo após salvar, o app poderia navegar automaticamente para a seção Editor e carregar o arquivo recém-salvo, caso o usuário queira verificar ou continuar editando. Isso melhora o fluxo contínuo entre obter uma sugestão do LLM e refiná-la manualmente.
-
-Comando de Chat para salvar arquivo: Além do botão na interface, poderíamos dar suporte a comandos de linguagem natural no próprio chat. Exemplo: o usuário escreve para o LLM algo como "Salve esse código no DBFS como analise_projeto.sql". Sem integração, o LLM não teria como realmente efetuar essa ação (ele poderia talvez responder "Arquivo salvo" sem ter feito nada, o que não é ideal). Para tratar isso corretamente, podemos implementar uma interceptação no front-end:
-
-Quando o usuário envia uma mensagem no chat, antes de enviar para o modelo, checar se corresponde a um padrão de salvar arquivo (por exemplo, começa com "salvar" ou "save file"). Caso positivo, o front pode interromper o envio ao LLM e tratar ele mesmo. Podemos parsear a mensagem do usuário para extrair o nome do arquivo desejado (e talvez qual conteúdo salvar, se ele se refere à resposta anterior, etc.). Provavelmente, a intenção será salvar o último resultado gerado pelo LLM. Nesse caso, o front-end pode pegar o conteúdo da última mensagem do assistente, chamar o endpoint de salvar arquivo (como acima) e então inserir uma mensagem no chat do tipo: Assistente: "Arquivo analise_projeto.sql salvo no DBFS." confirmando a ação.
-
-Essa abordagem requer que guardemos a referência ao último output do LLM. O componente de chat pode manter o histórico. O comando pode ser algo estruturado, como !save nome.ext ou apenas linguagem natural que detectamos via regex.
-
-Observação: Também poderíamos implementar essa funcionalidade do lado do backend LLM como uma ferramenta (tool) que o agente pode chamar – ou seja, transformar "save file" em uma função que o agente LLM pode acionar (se estivermos usando LangChain/ReAct with tools ou OpenAI Functions). Porém, isso adiciona complexidade de AI agent. Dado o escopo, uma implementação front-end simplificada (botão ou interceptação de comando) é mais direta e garante controle explícito da ação de salvar.
-
-Uso do Editor via Chat: Outra possibilidade é permitir que o chat abra o editor ou informe o usuário sobre arquivos. Por exemplo, se o usuário perguntar "Abra o arquivo X", o LLM poderia responder instruindo a abrir, e podemos transformar isso numa ação. Contudo, sair do domínio Q&A e executar ações no app deve ser feito cuidadosamente (talvez através de uma lista de opções ou botões gerados). Inicialmente, focaremos apenas no fluxo de salvar conteúdo gerado pelo LLM.
-
-Para implementar o botão "Salvar como arquivo" nas respostas, modificaremos o componente de mensagem ou markdown renderer. Como o código usa a biblioteca marked para renderizar Markdown, podemos pós-processar a renderização dos <pre><code> ou envolver o bloco em um contêiner com botão. Alternativamente, podemos renderizar código com um custom component: por exemplo, se o MarkdownRenderer detectar um bloco de código, em vez de simplesmente gerar <pre>, ele pode gerar um componente <CodeBlock> nosso que inclui o <pre> e um <button> no canto. Esse botão onClick disparará a lógica de salvar (dialog + API call). Essa customização garante que não mexemos com a string Markdown em si, mas com a renderização React, aproveitando a flexibilidade do front-end.
-
-Em resumo, a integração com o chat traz conveniência: o usuário pode ir do LLM -> Arquivo rapidamente. Isso atende cenários como: o engenheiro pede ao LLM "gera uma query que faz X", o LLM responde com o SQL, e o usuário salva direto no repositório (DBFS) para usar no futuro. Ou o usuário escreve documentação no chat e salva como Markdown no projeto. Tudo isso sem copiar/colar manualmente entre ferramentas, aumentando a produtividade.
-
-Considerações de Segurança
-
-Implementar um editor de arquivos acarreta alguns riscos se não forem tomadas precauções. Vamos abordar os principais pontos – restrição de escopo (pasta), validação de tipos de arquivo, e outras validações – para garantir segurança e controle:
-
-Restrição a Pasta Base: Conforme definido, o Editor deve operar apenas em uma pasta específica do DBFS (configurável via variável ou constante). É crucial que o backend restringe o path recebido aos limites dessa pasta. Ou seja, ao receber um path no GET/POST, o FastAPI deve verificar se ele começa com o prefixo configurado (por ex: dbfs:/FileStore/appdata/meuapp/). Se um path for enviado fora dessa raiz (ex: dbfs:/ ou outra área sensível), a requisição deve ser rejeitada (HTTP 403 ou 400). Isso previne que usuários mal-intencionados ou eventuais bugs exponham arquivos fora do escopo pretendido (por exemplo, alguém tentar ler dbfs:/mnt/secure-data/passwords.csv). No front-end, podemos adicionalmente ocultar ou nem oferecer opção de navegar fora da pasta alvo – o FileBrowser começaria já no diretório base fixo.
-
-Validação de Nome/Tipo de Arquivo: No contexto deste editor, apenas arquivos de texto com extensão .sql ou .md são esperados. Portanto, devemos validar os nomes tanto no front quanto no back:
-
-No front-end, ao criar novo arquivo ou salvar existente, garantir que o nome termina em .sql ou .md. Podemos bloquear outros sufixos na UI (ou pelo menos alertar "Tipo de arquivo não suportado").
-
-No backend, uma verificação semelhante: se path não corresponder a um padrão permitido (por exemplo, usar regex para .sql$|.md$ no caminho completo), então retornar erro em vez de tentar acessar. Isso impede gravar arquivos de tipos inesperados (como binários ou scripts potencialmente perigosos).
-
-Essa limitação de tipos também simplifica garantir que o conteúdo é texto simples (evitando necessidade de tratar binário).
-
-Sanitização de Path: Caso o nome do arquivo venha do usuário (ex: via chat ou input), devemos sanitizá-lo para evitar caracteres inválidos ou tentativas de path traversal. Como o DBFS path é do tipo dbfs:/diretorio/arquivo, não há “../” literal para subir nível (a API provavelmente não permite), mas por via das dúvidas podemos bloquear caracteres como / no nome do arquivo (exceto para separador de diretório se permitirmos subpastas via interface). Basicamente, nomes de arquivo devem ser simples, sem sequência suspeitas. Também evitar espaços ou caracteres especiais que possam causar problema com chamadas REST. Uma abordagem é permitir apenas [a-zA-Z0-9._-] nos nomes, ou algo próximo disso, informando ao usuário se o nome for inválido.
-
-Autenticação e Autorização: Assegure-se de que somente usuários autenticados possam usar esses endpoints de arquivo. Pelo código, parece haver um hook de autenticação (useAuth) e possivelmente um login. O FastAPI poderia checar um token de sessão ou similar. Como é um app interno, todos logados teriam acesso semelhante, mas é bom reforçar. Se necessário, implementar no FastAPI Dependences um Depends(current_user) para proteger rotas /api/files e /api/listdir. Além disso, habilitar CORS apenas para o front-end origin e usar HTTPS garantem que chamadas não sejam interceptadas ou feitas por terceiros não autorizados.
-
-Controle de Acesso no DBFS: O token do Databricks usado pelo backend tipicamente tem permissões amplas (talvez de um service principal ou admin). Já restringimos por código a pasta base, mas vale mencionar: se quisermos camada extra, podemos criar no Databricks uma pasta designada e ajustar ACLs de token para acesso somente ali (se o Databricks permitir granularidade assim para tokens). Em muitos casos não é possível restringir tanto, então confiamos no controle do app.
-
-Validação de Conteúdo: Em geral, editar arquivos de texto não apresenta risco direto de comando. Ainda assim, atenção para não executar nada do conteúdo recebido. O backend deve tratar o conteúdo como dado opaco (salvá-lo diretamente). Se futuramente houver alguma funcionalidade de "executar SQL" via arquivos, aí sim precisaria de validação anti SQL injection, etc., mas no caso do Editor isso não se aplica diretamente (essa preocupação já estaria no módulo de queries SQL separado).
-
-Limites de Tamanho e Rate Limit: Como mencionado, podemos impor um limite de tamanho de arquivo aceito (por exemplo, 1 MB, alinhado ao limite da API Databricks). Se alguém tentar salvar algo maior, retornar erro indicando que excede o tamanho. Também evitar salvar conteúdo binário (poderíamos detectar se o texto decodificado não é válido UTF-8, por ex.). Adicionalmente, implementar rate limiting no FastAPI (ex: limite de X saves por minuto por usuário/IP) previne abuso, embora em ambiente controlado de poucos usuários isso seja menos crítico.
-
-Logs e Auditoria: Para contexto empresarial, pode ser útil registrar atividades sensíveis. Por exemplo, logar toda operação de escrita de arquivo com usuário, path e timestamp. Isso não impede nada em tempo real, mas cria trilha de auditoria caso precise ver "quem editou tal arquivo". Esses logs podem ficar no backend (stdout ou um arquivo de log no servidor). Não expor logs no front.
-
-Tomando essas medidas, garantimos que a funcionalidade de edição não abra brechas de segurança significativas. Em essência, confinamos a edição a um âmbito controlado (pasta e tipos específicos), validamos entradas e mantemos as credenciais seguras apenas no servidor. Assim, os engenheiros de dados podem editar seus scripts sem risco de tocar em arquivos indevidos ou expor informações sensíveis.
-
-Melhores Práticas de UX para o Editor de Texto
-
-Para que a experiência do usuário (engenheiro de dados) seja fluida e produtiva, devemos seguir algumas boas práticas de design de interface e usabilidade no Editor:
-
-Familiaridade de IDE: Data engineers frequentemente usam IDEs ou notebooks; o editor deve trazer elementos familiares. Portanto, habilitar numeração de linhas, destaque de sintaxe colorido e usar fonte monoespaçada (geralmente default nesses componentes) é essencial. Também convém mostrar uma linha de cursor com highlight e permitir buscar texto (Ctrl+F) dentro do editor – Monaco, por exemplo, já suporta Ctrl+F nativamente
-blog.logrocket.com
-blog.logrocket.com
-.
-
-Tema Consistente: Se o app possui um tema escuro (como sugerido pelo uso de Tailwind com classes bg-gray-900 etc.), configurar o editor para tema escuro mantém a consistência visual e reduz fadiga visual. Monaco Editor permite definir theme="vs-dark" facilmente
-blog.logrocket.com
-, e CodeMirror tem temas como vscodeDark disponíveis
-blog.logrocket.com
-. Cores de destaque de sintaxe devem contrastar bem com o fundo (Monaco/CodeMirror já cuidam disso nos temas populares).
-
-Indicadores de Status e Feedback: Sempre que uma ação ocorrer em background (carregando ou salvando), informe o usuário:
-
-Ao carregar um arquivo (GET files), pode-se mostrar um spinner ou mensagem "Carregando..." no editor até o conteúdo aparecer, para o usuário saber que está em progresso.
-
-Durante auto-save, pode mostrar discretamente "Salvando..." no rodapé do editor ou mudar o ícone de salvar para um estado ativo. Quando concluir, mostrar "Salvo" rapidamente. Se usar um ícone, pode trocar para um checkmark momentâneo.
-
-Em caso de erro no save (ex: falha de rede), exibir imediatamente um alerta ou notificação indicando que não foi possível salvar, mantendo as mudanças no editor (talvez marcar o status como "Erro ao salvar, tente novamente"). Não esconder problemas do usuário.
-
-Prevenção de Perda de Dados: Implementar confirmação ao fechar/navegar se há alterações não salvas (caso ainda utilizemos um botão salvar manual). Ninguém quer perder trabalho por engano. Um diálogo "Existem alterações não salvas, deseja sair mesmo assim?" pode salvar o dia. No caso do auto-save, essa janela de risco diminui, mas ainda pode haver o instante entre digitar e salvar automático.
-
-Facilidade de Navegação de Arquivos: Se há muitos arquivos, um filtro ou busca na lista de arquivos seria útil. Por exemplo, um campo de busca acima da lista para filtrar por nome. Em árvore de diretório, permitir expandir/colapsar facilmente. Além disso, para distinguir arquivos .sql de .md, podemos usar ícones ou cor diferente, ou categorizar (não obrigatório, mas ajuda visualmente).
-
-Operações de Arquivo: Além de abrir e salvar, pense em outras ações comuns:
-
-Renomear ou Deletar arquivo: No escopo atual não foi solicitado, mas poderíamos projetar com extensão futura em mente. Talvez não implementar agora, mas deixar espaço na UI (por ex., clique direito no arquivo poderia listar "Renomear, Excluir"). Se implementado, seriam chamadas adicionais ao DBFS API (delete etc). Mas se não for necessário, podemos simplificar omitindo esses para evitar riscos de deleção acidental.
-
-Download do arquivo: Oferecer opção de baixar o arquivo (para edição offline ou versionamento manual) também é uma ideia. Um botão "Baixar .sql" poderia simplesmente pegar o conteúdo atual e criar um blob para download no navegador.
-
-Integração com atalhos: Usuários técnicos gostam de atalhos de teclado. Podemos interceptar Ctrl/Cmd+S no editor page para chamar a função de salvar (preventDefault do browser). Monaco Editor às vezes já intercepta, mas podemos customizar. Também Enter numa sugestão do LLM chat para salvar, etc., conforme necessidade.
-
-Preview de Markdown: Como suportamos .md, seria interessante uma visualização Markdown renderizada. Talvez um modo de preview toggle no editor: o usuário edita markdown e clica "Preview" para ver formatado. Isso pode ser implementado simples, reutilizando o MarkdownRenderer do chat para mostrar o conteúdo. Não é prioridade absoluta (já que data engineers podem estar ok vendo raw MD), mas seria um plus de UX. Poderíamos deixar isso como melhoria futura.
-
-Responsividade e Layout: Assegurar que o Editor use bem o espaço da tela. Provavelmente o app é desktop-first (por se tratar de código), mas ainda assim:
-
-A lista de arquivos pode ser uma sidebar redimensionável, permitindo o usuário alargá-la se os nomes forem longos.
-
-O editor de código deve expandir para ocupar todo o restante do espaço disponível, com scroll interno se o conteúdo for grande.
-
-Em telas muito pequenas, talvez ocultar a lista de arquivos atrás de um botão (tipo "Mostrar arquivos").
-
-Consistência com o resto do app: Usar o mesmo sistema de design (cores Tailwind, etc.). Por exemplo, botões ter o mesmo estilo dos botões em outras páginas. Se há um MainLayout com cabeçalho, manter isso visível para contexto (ex: título "Editor de Arquivos" no topo se adequado).
-
-Aplicando essas práticas, o Editor se tornará uma ferramenta confortável para o usuário. O auto-save evita perda de trabalho e reduz a ansiedade de lembrar de salvar. A sintaxe colorida e temas adequados aumentam a legibilidade do código e texto. E fluxos integrados (como salvar diretamente do chat e abrir no editor) agilizam tarefas comuns, tornando o aplicativo um ambiente unificado para exploração de dados, desenvolvimento de queries e documentação leve.
-
-Com este plano, cobrimos a estrutura de front-end (novos componentes e integração na navegação existente), os endpoints e lógica de backend para leitura/escrita no DBFS, a interação direta com o chat/LLM para salvar conteúdo gerado e todos os cuidados de segurança e usabilidade. A implementação seguindo essas diretrizes resultará em uma seção "Editor" robusta e útil para os engenheiros de dados, permitindo edição de scripts SQL e markdown de forma segura, integrada e eficiente no ambiente Databricks. Todas as interações permanecem mediadas pelo backend (padrão BFF), garantindo controle sobre o acesso ao Databricks, enquanto o front-end fornece uma UX rica aproveitando componentes de editor de código modernos. Enfim, o aplicativo ganha uma funcionalidade semelhante a um mini-IDE dentro do dashboard, alinhada às necessidades do usuário final.
+Relatório Arquitetural de Engenharia: Implementação de Explorador de Catálogo de Dados Unity Catalog em React e FastAPI
+
+
+1. Introdução e Fundamentos Arquiteturais
+
+
+1.1. Escopo e Objetivos Estratégicos
+
+O presente relatório técnico estabelece o plano diretor para a implementação de um componente de "Explorador de Banco de Dados" (Database Explorer) dentro de uma aplicação de dashboard integrada ao Databricks. O objetivo primordial é replicar e expandir a funcionalidade de navegação hierárquica encontrada em IDEs de banco de dados tradicionais (como DBeaver, DataGrip) e na própria interface nativa do Databricks SQL Editor, permitindo que engenheiros de dados e analistas naveguem fluidamente pela estrutura do Unity Catalog.
+A arquitetura proposta deve resolver o desafio de visualizar grandes volumes de metadados — potencialmente milhares de catálogos, esquemas e tabelas — sem comprometer a performance do frontend. A solução adotará uma abordagem "from scratch" (do zero) no desenvolvimento dos componentes de interface em React, priorizando o controle absoluto sobre a renderização e o gerenciamento de estado, em detrimento do uso de bibliotecas de componentes de terceiros "caixa-preta" que frequentemente introduzem inchaço (bloat) e limitações de customização. No backend, a estratégia baseia-se na extensão do serviço FastAPI existente para atuar como um proxy inteligente e seguro para as APIs REST do Unity Catalog e a API de Execução de Declarações SQL do Databricks.1
+Este documento detalha a análise dos requisitos de governança de dados impostos pelo Unity Catalog, a teoria por trás da virtualização de listas hierárquicas em interfaces web modernas, e o protocolo de comunicação otimizado entre o cliente React e o servidor Python.
+
+1.2. O Modelo de Objetos do Unity Catalog e Implicações de UI
+
+Para projetar um explorador eficaz, é imperativo compreender a ontologia do Unity Catalog, pois ela dita a estrutura da árvore de navegação. O Unity Catalog organiza os dados em uma hierarquia de três níveis, que deve ser refletida fielmente na interface do usuário:
+Metastore: O contêiner de nível superior de metadados. Cada espaço de trabalho (workspace) do Databricks está anexado a um metastore.2 A aplicação deve ser capaz de identificar o metastore ativo, embora a navegação geralmente comece no nível do Catálogo.
+Catálogo (Catalog): O primeiro nível da hierarquia de dados (ex: main, samples). Serve como agrupador lógico e barreira de isolamento de dados. A interface deve listar todos os catálogos visíveis ao usuário.3
+Esquema (Schema/Database): O segundo nível (ex: default, nyctaxi). Contém tabelas, visualizações e funções. A navegação deve permitir a expansão de um catálogo para revelar seus esquemas.5
+Tabelas e Visualizações (Tables & Views): O terceiro nível, contendo os ativos de dados reais. Tabelas podem ser gerenciadas (Managed) ou externas (External), e a interface deve, idealmente, distinguir visualmente entre tabelas, visualizações e visualizações materializadas através de ícones distintos.7
+Colunas e Metadados: Embora não sejam nós de navegação primários, a seleção de uma tabela deve revelar suas colunas, tipos de dados e comentários, exigindo chamadas de API adicionais ou consultas ao INFORMATION_SCHEMA.8
+A tabela abaixo resume o mapeamento entre os objetos do Unity Catalog e a representação visual proposta na árvore de navegação:
+Nível Hierárquico
+Entidade Unity Catalog
+Representação Visual
+Endpoint de Dados (API)
+Permissão Necessária
+Raiz
+Metastore
+Container da Árvore
+N/A (Implícito no Workspace)
+N/A
+Nível 1
+Catalog
+Nó Expansível (Pasta Raiz)
+/api/2.1/unity-catalog/catalogs
+USE CATALOG ou BROWSE
+Nível 2
+Schema
+Nó Expansível (Subpasta)
+/api/2.1/unity-catalog/schemas
+USE SCHEMA
+Nível 3
+Table/View
+Nó Terminal (Item Selecionável)
+/api/2.1/unity-catalog/tables
+SELECT
+Painel de Detalhes
+Data Grid
+Tabela de Dados (Spreadsheet)
+SQL Statement API (SELECT *)
+SELECT
+
+
+1.3. O Problema da Escala e a Necessidade de Virtualização
+
+Um ambiente corporativo Databricks típico não é trivial. Pode conter dezenas de catálogos, centenas de esquemas por catálogo e milhares de tabelas por esquema. Renderizar essa estrutura usando componentes HTML padrão (como listas não ordenadas <ul> aninhadas recursivamente) resulta em uma árvore DOM (Document Object Model) excessivamente grande.
+Navegadores web modernos, embora otimizados, sofrem degradação significativa de performance (conhecida como "jank") quando o número de nós DOM excede alguns milhares. Operações de reflow e repaint tornam-se custosas, causando travamentos na rolagem e atrasos na expansão de pastas.
+A análise de arquitetura frontend indica que a única solução viável para um explorador de banco de dados de nível de produção é a Virtualização de Lista (ou "Windowing"). Esta técnica envolve renderizar apenas os itens que estão atualmente visíveis na "janela" de visualização do usuário (viewport), reciclando os elementos DOM à medida que o usuário rola a lista.10
+Para uma estrutura de árvore, isso apresenta um desafio algorítmico: a árvore deve ser "achatada" (flattened) em uma lista linear para ser compatível com bibliotecas de virtualização como react-window. Este relatório detalhará o algoritmo de projeção necessário para transformar a estrutura hierárquica de dados do Unity Catalog em uma estrutura linear virtualizável.
+
+2. Estratégia de Integração Backend: FastAPI e Databricks
+
+A integração com o Databricks deve ser robusta, segura e performática. O código atual do backend 1 sugere uma arquitetura baseada em serviços, onde o FastAPI atua como um orquestrador. A comunicação direta do frontend com o Databricks é desencorajada por razões de segurança (exposição de tokens) e CORS.
+
+2.1. Análise Comparativa: SQL API vs. REST API para Metadados
+
+Para popular a árvore de navegação, existem duas abordagens principais para recuperar metadados:
+Execução de Comandos SQL via JDBC/ODBC ou Statement Execution API:
+Comandos: SHOW CATALOGS, SHOW SCHEMAS IN catalog, SHOW TABLES IN schema.
+Vantagens: Utiliza a mesma infraestrutura de execução que as consultas de dados.
+Desvantagens: Latência elevada. Cada comando SQL precisa ser analisado, planejado e executado pelo SQL Warehouse, que pode ter tempos de inicialização (cold start) ou filas. A resposta é frequentemente texto não estruturado ou tabular simples, exigindo parsing adicional. Além disso, a paginação de milhares de tabelas via SQL é complexa e ineficiente.3
+Unity Catalog REST API (/api/2.1/unity-catalog/...):
+Vantagens: Projetada especificamente para operações de metadados. Oferece respostas JSON estruturadas, baixa latência (não requer um cluster Spark "quente" para metadados simples), paginação nativa via page_token e filtragem rica.12
+Desvantagens: Requer gerenciamento de escopo de token apropriado.
+Decisão Arquitetural: A solução adotará uma Abordagem Híbrida.
+Navegação na Árvore (Metadados): Utilizará estritamente a Unity Catalog REST API via backend FastAPI. Isso garante que a expansão de pastas na UI seja quase instantânea, desacoplada da carga do SQL Warehouse.
+Visualização de Dados (Data Grid): Utilizará a SQL Statement Execution API (/api/2.0/sql/statements) para executar consultas SELECT e TABLESAMPLE. Isso é necessário porque a API REST do Unity Catalog não fornece acesso aos dados (linhas), apenas aos metadados.2
+
+2.2. Design da Camada de Serviço Python (databricks_service)
+
+O arquivo backend/app/services/databricks.py deve ser expandido para encapsular a lógica de comunicação com o Unity Catalog. Atualmente, ele foca em execução SQL e DBFS. A nova implementação deve adicionar métodos específicos para descoberta de catálogo.
+
+2.2.1. Implementação dos Métodos de Descoberta
+
+Abaixo, apresenta-se a lógica detalhada para a implementação dos métodos de recuperação de metadados, enfatizando o tratamento de erros e a transformação de dados.
+
+Python
+
+
+# Extensão proposta para backend/app/services/databricks.py
+
+def list_catalogs(self):
+    """
+    Recupera a lista de catálogos do metastore atual.
+    Utiliza o endpoint GET /api/2.1/unity-catalog/catalogs.
+    """
+    config = get_databricks_config()
+    if not config:
+        return self._get_mock_catalogs()
+
+    url = f"{config.host.rstrip('/')}/api/2.1/unity-catalog/catalogs"
+    headers = self._get_headers(config)
+    
+    # Implementação de paginação robusta
+    catalogs =
+    page_token = None
+    
+    while True:
+        params = {}
+        if page_token:
+            params['page_token'] = page_token
+            
+        try:
+            response = requests.get(url, headers=headers, params=params)
+            response.raise_for_status()
+            data = response.json()
+            
+            if 'catalogs' in data:
+                catalogs.extend(data['catalogs'])
+            
+            page_token = data.get('next_page_token')
+            if not page_token:
+                break
+                
+        except requests.exceptions.RequestException as e:
+            # Log error appropriate to production environment
+            raise ValueError(f"Falha ao listar catálogos: {str(e)}")
+
+    # Filtragem opcional ou transformação pode ocorrer aqui
+    return catalogs
+
+def list_schemas(self, catalog_name: str):
+    """
+    Lista esquemas dentro de um catálogo específico.
+    Endpoint: GET /api/2.1/unity-catalog/schemas
+    """
+    config = get_databricks_config()
+    #... (verificação de config e mock)
+
+    url = f"{config.host.rstrip('/')}/api/2.1/unity-catalog/schemas"
+    headers = self._get_headers(config)
+    params = {'catalog_name': catalog_name}
+    
+    # Paginação similar ao método list_catalogs deve ser implementada
+    #...
+    
+    return schemas
+
+def list_tables(self, catalog_name: str, schema_name: str):
+    """
+    Lista tabelas e views dentro de um esquema.
+    Endpoint: GET /api/2.1/unity-catalog/tables
+    """
+    config = get_databricks_config()
+    
+    url = f"{config.host.rstrip('/')}/api/2.1/unity-catalog/tables"
+    headers = self._get_headers(config)
+    params = {
+        'catalog_name': catalog_name, 
+        'schema_name': schema_name,
+        'omit_columns': 'true' # Otimização de performance: não buscar colunas na listagem inicial
+    }
+    
+    #... (lógica de requisição e paginação)
+    
+    return tables
+
+
+Análise de Segurança e Permissões:
+O backend utiliza um Token de Acesso Pessoal (PAT) ou token OAuth de Service Principal (dapi...) configurado em app.core.config.1 O Unity Catalog impõe controle de acesso baseado em funções (RBAC). Se o token utilizado pelo backend não tiver a permissão USE CATALOG em um catálogo específico, a API simplesmente omitirá esse catálogo da resposta.13 Isso é vantajoso, pois o backend não precisa implementar lógica complexa de filtragem de permissões; ele reflete a "verdade" conforme vista pelo token de serviço. No entanto, é crucial que o token tenha permissões suficientes (idealmente apenas leitura/browse) para servir como um explorador geral, ou que a aplicação implemente um fluxo "On-Behalf-Of" (OBO) se a intenção for mostrar apenas o que o usuário logado pode ver (o que exigiria OAuth 2.0 user-to-server, mais complexo). Assumindo a arquitetura atual baseada em um token de serviço único 1, todos os usuários do dashboard verão o que o Service Principal pode ver.
+
+2.3. Definição das Rotas da API (routes_explorer.py)
+
+Para manter a organização e a separação de preocupações (SoC), recomenda-se criar um novo módulo de rotas backend/app/api/routes_explorer.py em vez de sobrecarregar routes.py ou routes_files.py.
+O uso de modelos Pydantic é essencial aqui para garantir que o contrato de dados com o frontend seja rigoroso e documentado automaticamente (via OpenAPI/Swagger).
+
+Python
+
+
+# backend/app/api/routes_explorer.py
+from fastapi import APIRouter, HTTPException, Query
+from typing import List, Optional
+from pydantic import BaseModel
+from app.services.databricks import databricks_service
+
+router = APIRouter()
+
+# Modelos de Resposta Otimizados para o Frontend
+class CatalogNode(BaseModel):
+    name: str
+    type: str = "CATALOG"
+    comment: Optional[str] = None
+
+class SchemaNode(BaseModel):
+    name: str
+    catalog_name: str
+    type: str = "SCHEMA"
+    comment: Optional[str] = None
+
+class TableNode(BaseModel):
+    name: str
+    catalog_name: str
+    schema_name: str
+    table_type: str  # MANAGED, EXTERNAL, VIEW, MATERIALIZED_VIEW
+    full_name: str
+    type: str = "TABLE"
+
+@router.get("/explorer/catalogs", response_model=List[CatalogNode])
+async def get_catalogs():
+    """Retorna a lista de catálogos disponíveis."""
+    try:
+        raw_catalogs = databricks_service.list_catalogs()
+        # Transformação de dados brutos da API Databricks para o modelo do frontend
+        return [
+            CatalogNode(
+                name=c['name'], 
+                comment=c.get('comment'),
+                type="CATALOG"
+            ) for c in raw_catalogs
+        ]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/explorer/schemas", response_model=List)
+async def get_schemas(catalog_name: str = Query(..., description="Nome do catálogo pai")):
+    try:
+        raw_schemas = databricks_service.list_schemas(catalog_name)
+        return, 
+                catalog_name=s['catalog_name'],
+                comment=s.get('comment')
+            ) for s in raw_schemas
+        ]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Endpoint análogo para tabelas...
+
+
+Essa camada de abstração permite que o frontend seja agnóstico quanto às idiossincrasias da API do Databricks (como a mudança de nomes de campos ou estruturas aninhadas complexas), recebendo apenas o que precisa para renderizar a árvore.
+
+3. Engenharia Frontend: Construindo a Árvore Virtualizada
+
+A implementação do frontend em React é o ponto crítico para a experiência do usuário (UX). A seguir, detalha-se a estratégia "from scratch" utilizando react-window para performance máxima.
+
+3.1. Conceitos de Virtualização e Achatamento de Árvore
+
+Para renderizar uma árvore hierárquica em uma lista virtualizada (FixedSizeList do react-window), a estrutura de dados em árvore (nós contendo arrays de filhos) deve ser transformada em uma estrutura linear (array plano) em tempo de execução.10
+O algoritmo de "achatamento" (flattening) deve considerar apenas os nós que estão visíveis. Um nó é visível se e somente se todos os seus ancestrais estiverem expandidos.
+Algoritmo de Projeção Visual:
+Inicie com uma lista vazia visibleNodes.
+Itere sobre os nós raiz (Catálogos).
+Para cada nó, adicione-o a visibleNodes.
+Se o nó estiver no conjunto de expandedIds (estado da UI):
+a. Recupere seus filhos (do cache ou estado).
+b. Recursivamente aplique o passo 3 e 4 para os filhos.
+O resultado é um array onde a ordem dos índices corresponde exatamente à ordem visual vertical na tela.
+Este processo deve ser envolto em um useMemo para evitar recálculos desnecessários a cada renderização, recalculando apenas quando expandedIds ou os dados brutos mudarem.15
+
+3.2. Gerenciamento de Estado Assíncrono com React Query
+
+O carregamento de dados sob demanda (Lazy Loading) é mandatório. Não se deve carregar todos os esquemas de todos os catálogos na inicialização. Utilizaremos a biblioteca @tanstack/react-query (presumivelmente disponível ou a ser adicionada, dada sua popularidade no ecossistema React moderno e menção em snippets de melhores práticas 16).
+O padrão será:
+Ao expandir um nó, verificar se seus filhos já estão no cache.
+Se não, disparar a query assíncrona.
+Exibir um estado de carregamento (skeleton ou spinner) dentro da estrutura da árvore, logo abaixo do nó pai.
+
+3.3. Arquitetura de Componentes Proposta
+
+A estrutura de arquivos no frontend deve ser expandida da seguinte forma:
+
+
+
+frontend/src/
+  components/
+    explorer/
+      DatabaseExplorer.tsx    (Container principal da página)
+      ExplorerSidebar.tsx     (Painel lateral com a árvore)
+      VirtualTree.tsx         (Implementação da árvore virtualizada)
+      TreeNode.tsx            (Renderizador de linha individual)
+      TablePreview.tsx        (Visualização de dados da tabela selecionada)
+  hooks/
+    useDatabaseTree.ts        (Lógica de estado, expansão e achatamento)
+    useExplorerData.ts        (Hooks do React Query para buscar API)
+
+
+
+4. Implementação Detalhada Passo a Passo
+
+A seguir, apresenta-se o código e a lógica para implementar os componentes centrais.
+
+Passo 1: Camada de Serviço Frontend (services/explorerService.ts)
+
+Primeiro, definimos a interface com o backend FastAPI.
+
+TypeScript
+
+
+// frontend/services/explorerService.ts
+import { api } from './api'; // Assumindo que existe um wrapper base axios/fetch
+
+export interface Catalog {
+  name: string;
+  type: string;
+  comment?: string;
+}
+
+export interface Schema {
+  name: string;
+  catalog_name: string;
+  comment?: string;
+}
+
+export interface Table {
+  name: string;
+  schema_name: string;
+  catalog_name: string;
+  table_type: string; // MANAGED, EXTERNAL, VIEW
+  full_name: string;
+}
+
+// Funções de fetch tipadas
+export const fetchCatalogs = async (): Promise<Catalog> => {
+  const response = await fetch('/api/explorer/catalogs');
+  if (!response.ok) throw new Error('Erro ao carregar catálogos');
+  return response.json();
+};
+
+export const fetchSchemas = async (catalog: string): Promise<Schema> => {
+  const response = await fetch(`/api/explorer/schemas?catalog_name=${encodeURIComponent(catalog)}`);
+  if (!response.ok) throw new Error('Erro ao carregar esquemas');
+  return response.json();
+};
+
+export const fetchTables = async (catalog: string, schema: string): Promise<Table> => {
+  const response = await fetch(`/api/explorer/tables?catalog_name=${encodeURIComponent(catalog)}&schema_name=${encodeURIComponent(schema)}`);
+  if (!response.ok) throw new Error('Erro ao carregar tabelas');
+  return response.json();
+};
+
+
+
+Passo 2: Hook de Lógica da Árvore (hooks/useDatabaseTree.ts)
+
+Este hook encapsula a complexidade de manter o estado de expansão e a lógica de achatamento da árvore para a virtualização. Ele utiliza react-query para gerenciar o cache de dados.
+
+TypeScript
+
+
+import { useState, useMemo, useCallback } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { fetchCatalogs, fetchSchemas, fetchTables } from '../services/explorerService';
+
+export type NodeType = 'CATALOG' | 'SCHEMA' | 'TABLE';
+
+// Estrutura unificada para o nó da árvore visual
+export interface TreeNode {
+  id: string;           // Identificador único (ex: "main", "main.default", "main.default.trips")
+  label: string;        // Texto de exibição
+  type: NodeType;
+  level: number;        // Profundidade para indentação (0, 1, 2)
+  parentId: string | null;
+  isLoaded?: boolean;   // Se os filhos já foram carregados
+  isLoading?: boolean;  // Estado transiente de carregamento
+  data?: any;           // Objeto original (Catalog/Schema/Table)
+}
+
+export const useDatabaseTree = () => {
+  const queryClient = useQueryClient();
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  
+  // 1. Carregar Catálogos (Raiz)
+  const { data: catalogs, isLoading: isLoadingCatalogs } = useQuery({
+    queryKey: ['catalogs'],
+    queryFn: fetchCatalogs
+  });
+
+  // Estado local para armazenar filhos carregados sob demanda.
+  // Chave = ID do pai, Valor = Lista de nós filhos
+  const [loadedChildren, setLoadedChildren] = useState<Record<string, TreeNode>>({});
+  const [loadingNodes, setLoadingNodes] = useState<Set<string>>(new Set());
+
+  // Função para alternar expansão/colapso
+  const toggleNode = useCallback(async (node: TreeNode) => {
+    const newExpanded = new Set(expandedIds);
+
+    if (expandedIds.has(node.id)) {
+      // Colapsar
+      newExpanded.delete(node.id);
+      setExpandedIds(newExpanded);
+    } else {
+      // Expandir
+      newExpanded.add(node.id);
+      setExpandedIds(newExpanded);
+
+      // Se ainda não carregou os filhos, buscar na API
+      if (!loadedChildren[node.id]) {
+        setLoadingNodes(prev => new Set(prev).add(node.id));
+        try {
+          let children: TreeNode =;
+          
+          if (node.type === 'CATALOG') {
+            const schemas = await queryClient.fetchQuery({
+              queryKey: ['schemas', node.label],
+              queryFn: () => fetchSchemas(node.label)
+            });
+            children = schemas.map(s => ({
+              id: `${node.label}.${s.name}`,
+              label: s.name,
+              type: 'SCHEMA',
+              level: 1,
+              parentId: node.id,
+              data: s
+            }));
+          } else if (node.type === 'SCHEMA') {
+            // node.id assume formato "catalog.schema"
+            const [catalog, schema] = node.id.split('.');
+            const tables = await queryClient.fetchQuery({
+              queryKey: ['tables', catalog, schema],
+              queryFn: () => fetchTables(catalog, schema)
+            });
+            children = tables.map(t => ({
+              id: `${catalog}.${schema}.${t.name}`,
+              label: t.name,
+              type: 'TABLE',
+              level: 2,
+              parentId: node.id,
+              data: t
+            }));
+          }
+
+          setLoadedChildren(prev => ({...prev, [node.id]: children }));
+        } catch (err) {
+          console.error("Erro ao expandir nó:", err);
+          // Em caso de erro, talvez remover do expandedIds para permitir tentar novamente
+          newExpanded.delete(node.id);
+          setExpandedIds(new Set(newExpanded));
+        } finally {
+          setLoadingNodes(prev => {
+            const next = new Set(prev);
+            next.delete(node.id);
+            return next;
+          });
+        }
+      }
+    }
+  }, [expandedIds, loadedChildren, queryClient]);
+
+  // 3. Achatamento (Flattening) da Árvore para Virtualização
+  // Recalcula a lista linear sempre que a expansão ou dados mudam.
+  const flatList = useMemo(() => {
+    if (!catalogs) return;
+
+    const result: TreeNode =;
+    
+    const processNode = (node: TreeNode) => {
+      result.push(node);
+      
+      // Se expandido, processar filhos
+      if (expandedIds.has(node.id)) {
+        if (loadingNodes.has(node.id)) {
+          // Adicionar nó temporário de loading
+          result.push({
+            id: `${node.id}-loading`,
+            label: 'Carregando...',
+            type: 'TABLE', // Tipo dummy
+            level: node.level + 1,
+            parentId: node.id,
+            isLoading: true
+          });
+        } else {
+          const children = loadedChildren[node.id];
+          if (children) {
+            children.forEach(processNode);
+          } else {
+            // Caso especial: expandido mas sem filhos (vazio)
+            result.push({
+                id: `${node.id}-empty`,
+                label: '(Vazio)',
+                type: 'TABLE', 
+                level: node.level + 1,
+                parentId: node.id,
+                isLoading: false // Apenas visual
+            });
+          }
+        }
+      }
+    };
+
+    // Converter catálogos raiz em TreeNodes
+    const rootNodes: TreeNode = catalogs.map(c => ({
+      id: c.name,
+      label: c.name,
+      type: 'CATALOG',
+      level: 0,
+      parentId: null,
+      data: c
+    }));
+
+    rootNodes.forEach(processNode);
+    return result;
+  }, [catalogs, expandedIds, loadedChildren, loadingNodes]);
+
+  return { flatList, toggleNode, expandedIds, isLoadingCatalogs };
+};
+
+
+
+Passo 3: Componente Visual (ExplorerSidebar.tsx)
+
+Implementação da sidebar usando react-window para renderizar a flatList.
+
+TypeScript
+
+
+import React from 'react';
+import { FixedSizeList as List, ListChildComponentProps } from 'react-window';
+import AutoSizer from 'react-virtualized-auto-sizer';
+import { useDatabaseTree, TreeNode } from '../../hooks/useDatabaseTree';
+// Ícones importados dos componentes existentes
+import { ChevronRightIcon } from '../icons/ChevronRightIcon';
+import { ChevronDownIcon } from '../icons/ChevronDownIcon';
+import { TableIcon } from '../icons/TableIcon';
+import { DatabaseIcon } from '../icons/DatabaseIcon'; // Placeholder para Catalogo
+import { FolderIcon } from '../icons/FolderIcon';     // Placeholder para Schema
+
+interface ExplorerSidebarProps {
+  onSelectTable: (tableData: any) => void;
+}
+
+export const ExplorerSidebar: React.FC<ExplorerSidebarProps> = ({ onSelectTable }) => {
+  const { flatList, toggleNode, expandedIds, isLoadingCatalogs } = useDatabaseTree();
+
+  // Renderizador de Linha Otimizado (Memoizado pelo react-window)
+  const Row = ({ index, style }: ListChildComponentProps) => {
+    const node = flatList[index];
+    const isExpanded = expandedIds.has(node.id);
+    
+    // Cálculo dinâmico de indentação e padding
+    // level 0 = 12px, level 1 = 28px, level 2 = 44px
+    const paddingLeft = `${node.level * 16 + 12}px`; 
+
+    // Loading State Visual
+    if (node.isLoading) {
+      return (
+        <div style={style} className="flex items-center text-xs text-gray-500 italic select-none">
+          <div style={{ paddingLeft }} className="pl-8">Carregando itens...</div>
+        </div>
+      );
+    }
+
+    // Handler de Clique
+    const handleClick = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      if (node.type === 'TABLE') {
+        onSelectTable(node.data);
+      } else {
+        toggleNode(node);
+      }
+    };
+
+    // Seleção de Ícones e Cores com base no tipo
+    let Icon = DatabaseIcon;
+    let colorClass = "text-gray-400";
+    
+    if (node.type === 'SCHEMA') {
+        Icon = FolderIcon; // Usar ícone de pasta se disponível
+        colorClass = "text-yellow-500";
+    } else if (node.type === 'TABLE') {
+        Icon = TableIcon;
+        colorClass = "text-blue-400";
+    }
+
+    return (
+      <div 
+        style={style} 
+        className={`flex items-center hover:bg-gray-800 cursor-pointer text-sm text-gray-300 select-none transition-colors duration-75
+          ${node.type === 'TABLE'? 'hover:text-white' : ''}`}
+        onClick={handleClick}
+      >
+        <div style={{ paddingLeft }} className="flex items-center w-full pr-2 overflow-hidden">
+          {/* Botão Expander (Apenas para containers) */}
+          <div className="w-5 h-5 flex items-center justify-center mr-1 shrink-0">
+            {node.type!== 'TABLE' && (
+              <div className="p-0.5 rounded hover:bg-gray-700">
+                {isExpanded? <ChevronDownIcon className="w-3 h-3" /> : <ChevronRightIcon className="w-3 h-3" />}
+              </div>
+            )}
+          </div>
+
+          {/* Ícone do Tipo */}
+          <Icon className={`w-4 h-4 mr-2 shrink-0 ${colorClass}`} />
+
+          {/* Rótulo com Truncamento */}
+          <span className="truncate" title={node.label}>{node.label}</span>
+        </div>
+      </div>
+    );
+  };
+
+  if (isLoadingCatalogs) {
+    return <div className="p-4 text-gray-400 text-sm">Carregando catálogo...</div>;
+  }
+
+  return (
+    <div className="h-full flex flex-col bg-gray-900 border-r border-gray-700 w-64 shrink-0">
+      <div className="p-3 border-b border-gray-700 flex justify-between items-center bg-gray-900/50 backdrop-blur">
+        <span className="font-semibold text-gray-200 text-sm uppercase tracking-wider">Explorer</span>
+        {/* Aqui poderia entrar um botão de refresh */}
+      </div>
+      
+      <div className="flex-1 relative">
+        {/* AutoSizer garante que a lista ocupe todo o espaço vertical disponível */}
+        <AutoSizer>
+          {({ height, width }) => (
+            <List
+              height={height}
+              width={width}
+              itemCount={flatList.length}
+              itemSize={28} // Altura da linha compacta
+              itemKey={(index) => flatList[index].id} // Chave estável para performance de diff do React
+              overscanCount={5} // Renderizar 5 itens fora da tela para rolagem suave
+            >
+              {Row}
+            </List>
+          )}
+        </AutoSizer>
+      </div>
+    </div>
+  );
+};
+
+
+
+Passo 4: Integração na Página Principal (DatabaseExplorerPage.tsx)
+
+Esta página orquestra a interação entre a Sidebar e a área de conteúdo principal (Grid de Dados).
+
+TypeScript
+
+
+import React, { useState } from 'react';
+import { ExplorerSidebar } from '../components/explorer/ExplorerSidebar';
+import Spreadsheet from '../components/spreadsheet/Spreadsheet'; // Reutilizando componente existente
+import { executeRawQuery } from '../services/dashboardService'; // Serviço que chama /api/query
+
+const DatabaseExplorerPage: React.FC = () => {
+  const = useState<any | null>(null);
+  const = useState<any>();
+  const = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleSelectTable = async (table: any) => {
+    setActiveTable(table);
+    setLoadingData(true);
+    setError(null);
+    setTableData();
+    
+    // Constrói a query segura. 
+    // Nota: Em produção, usar parameters binding, mas para SELECT * LIMIT é aceitável concatenar
+    // se o full_name vier confiável da API do Unity Catalog.
+    const query = `SELECT * FROM ${table.full_name} LIMIT 1000`; 
+    
+    try {
+      // Reutiliza o serviço existente que bate no endpoint SQL Statement Execution
+      const result = await executeRawQuery(query, 'sql');
+      setTableData(result);
+    } catch (err) {
+      console.error("Falha ao carregar dados da tabela", err);
+      setError("Não foi possível carregar os dados. Verifique suas permissões ou se o SQL Warehouse está ativo.");
+    } finally {
+      setLoadingData(false);
+    }
+  };
+
+  const handleCloseSpreadsheet = () => {
+    setActiveTable(null);
+    setTableData();
+  };
+
+  return (
+    <div className="flex h-full w-full overflow-hidden bg-black">
+      {/* Painel Esquerdo: Navegador */}
+      <ExplorerSidebar onSelectTable={handleSelectTable} />
+
+      {/* Painel Direito: Conteúdo */}
+      <div className="flex-1 flex flex-col relative overflow-hidden">
+        {activeTable? (
+          <div className="h-full w-full flex flex-col">
+            {loadingData? (
+              <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-400 z-10 bg-black/50 backdrop-blur-sm">
+                 <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500 mb-4"></div>
+                 <span>Carregando dados de <strong>{activeTable.name}</strong>...</span>
+              </div>
+            ) : null}
+            
+            {error? (
+               <div className="p-8 text-center">
+                 <div className="text-red-500 text-lg mb-2">Erro</div>
+                 <p className="text-gray-400">{error}</p>
+               </div>
+            ) : (
+               <div className="h-full w-full p-0">
+                  {/* Reutilização do componente Spreadsheet existente */}
+                  <Spreadsheet 
+                      title={`Dados: ${activeTable.full_name}`}
+                      data={tableData}
+                      onClose={handleCloseSpreadsheet}
+                      isEditable={false} // Modo leitura para o explorer
+                  />
+               </div>
+            )}
+          </div>
+        ) : (
+          // Estado Vazio (Empty State)
+          <div className="flex-1 flex flex-col items-center justify-center text-gray-600 select-none">
+            <DatabaseIcon className="w-16 h-16 mb-4 opacity-20" />
+            <p>Selecione uma tabela no explorador para visualizar os dados</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+export default DatabaseExplorerPage;
+
+
+
+5. Otimização de Performance e Melhores Práticas
+
+A implementação acima segue princípios rígidos de performance. Abaixo, detalham-se as otimizações aplicadas e recomendações adicionais:
+Virtualização com react-window:
+Problema: Renderizar 50.000 tabelas travaria o navegador.
+Solução: A FixedSizeList renderiza apenas os ~30 itens visíveis na tela. O uso da propriedade itemKey é crucial; ela permite que o React reutilize componentes DOM mesmo quando a lista é reordenada ou filtrada, evitando "flashes" de renderização.
+Memoização de Transformação de Dados (useMemo):
+A função que "achata" a árvore (processNode em useDatabaseTree) tem complexidade O(N), onde N é o número de nós visíveis. Sem useMemo, essa função rodaria a cada render (ex: cada vez que um componente pai atualiza). O useMemo garante que ela só rode quando expandedIds ou loadedChildren mudam.
+Cache de Requisições com React Query:
+Ao fechar e reabrir uma pasta, o useQuery serve os dados do cache (staleTime padrão pode ser ajustado para 5-10 minutos para metadados que mudam pouco), proporcionando uma experiência instantânea "snappy".
+Tratamento de Estados de Carregamento:
+A UI não bloqueia. O indicador de carregamento é inserido como um "nó falso" na árvore. Isso evita que a layout shift (mudança brusca de layout) desoriente o usuário.
+Consultas de Dados Eficientes:
+O uso de LIMIT 1000 é uma proteção básica. Para tabelas maiores, recomenda-se implementar paginação no nível do SQL (usando OFFSET) ou, idealmente, a cláusula TABLESAMPLE (ex: SELECT * FROM table TABLESAMPLE (100 ROWS)), que é muito mais rápida em tabelas Delta grandes pois evita scan completo.18
+
+6. Conclusão e Roteiro de Evolução
+
+A arquitetura apresentada fornece uma fundação sólida para um explorador de dados integrado ao Databricks. Ao evitar bibliotecas de árvore genéricas e construir a lógica de virtualização sobre primitivas robustas (react-window + Hooks customizados), a aplicação ganha em performance e manutenibilidade.
+Próximos Passos Sugeridos:
+Busca/Filtro: Implementar uma barra de busca no topo da Sidebar. Isso exigirá um endpoint de busca no backend ou filtragem local na lista achatada (se o dataset total não for proibitivamente grande).
+Metadados Estendidos: Adicionar um painel de "Detalhes" (lado direito, em abas com o Spreadsheet) para mostrar schema, particionamento e lineage (usando a API de linhagem do Unity Catalog).20
+Abas Múltiplas: Evoluir o DatabaseExplorerPage para suportar múltiplas tabelas abertas simultaneamente em abas, gerenciando um array de activeTables no estado.
+Esta implementação atende integralmente aos requisitos de visualizar tabelas do Unity Catalog com a familiaridade de um IDE, respeitando as restrições de segurança e performance do ambiente Databricks.
+Works cited
+diegomrodrigues2-databricks-dashboard-app-8a5edab282632443 (7).txt
+What is Unity Catalog? - Azure Databricks | Microsoft Learn, accessed November 25, 2025, https://learn.microsoft.com/en-us/azure/databricks/data-governance/unity-catalog/
+SHOW CATALOGS - Azure Databricks - Microsoft Learn, accessed November 25, 2025, https://learn.microsoft.com/en-us/azure/databricks/sql/language-manual/sql-ref-syntax-aux-show-catalogs
+SHOW CATALOGS | Databricks on AWS, accessed November 25, 2025, https://docs.databricks.com/aws/en/sql/language-manual/sql-ref-syntax-aux-show-catalogs
+SHOW SCHEMAS - Azure Databricks - Microsoft Learn, accessed November 25, 2025, https://learn.microsoft.com/en-us/azure/databricks/sql/language-manual/sql-ref-syntax-aux-show-schemas
+SHOW SCHEMAS | Databricks on AWS, accessed November 25, 2025, https://docs.databricks.com/aws/en/sql/language-manual/sql-ref-syntax-aux-show-schemas
+SHOW TABLES - Azure Databricks - Microsoft Learn, accessed November 25, 2025, https://learn.microsoft.com/en-us/azure/databricks/sql/language-manual/sql-ref-syntax-aux-show-tables
+SHOW TABLE EXTENDED - Azure Databricks - Microsoft Learn, accessed November 25, 2025, https://learn.microsoft.com/en-us/azure/databricks/sql/language-manual/sql-ref-syntax-aux-show-table
+DESCRIBE TABLE - Azure Databricks - Microsoft Learn, accessed November 25, 2025, https://learn.microsoft.com/en-us/azure/databricks/sql/language-manual/sql-ref-syntax-aux-describe-table
+Virtualize large lists with react-window | Articles - web.dev, accessed November 25, 2025, https://web.dev/articles/virtualize-long-lists-react-window
+List Virtualization - Patterns.dev, accessed November 25, 2025, https://www.patterns.dev/vanilla/virtual-lists/
+List tables | Tables API | REST API reference | Databricks on AWS, accessed November 25, 2025, https://docs.databricks.com/api/workspace/tables/list
+List catalogs - REST API reference - Databricks documentation, accessed November 25, 2025, https://docs.databricks.com/api/workspace/catalogs/list
+Databricks Unity Catalog Analysis: A Comprehensive API-Driven Approach - Medium, accessed November 25, 2025, https://medium.com/@rahulgosavi.94/databricks-unity-catalog-analysis-a-comprehensive-api-driven-approach-dae8c9b121dd
+How To Render Large Datasets In React without Killing Performance | Syncfusion Blogs, accessed November 25, 2025, https://www.syncfusion.com/blogs/post/render-large-datasets-in-react/amp
+Lazy Loading with React Query - Carl Rippon, accessed November 25, 2025, https://carlrippon.com/lazy-loading-with-react-query/
+Fetching Hierarchical data for a tree component · TanStack query · Discussion #413 - GitHub, accessed November 25, 2025, https://github.com/TanStack/query/discussions/413
+TABLESAMPLE clause | Databricks on Google Cloud, accessed November 25, 2025, https://docs.databricks.com/gcp/en/sql/language-manual/sql-ref-syntax-qry-select-sampling
+TABLESAMPLE clause - Azure Databricks - Microsoft Learn, accessed November 25, 2025, https://learn.microsoft.com/en-us/azure/databricks/sql/language-manual/sql-ref-syntax-qry-select-sampling
+View data lineage using Unity Catalog - Azure Databricks - Microsoft Learn, accessed November 25, 2025, https://learn.microsoft.com/en-us/azure/databricks/data-governance/unity-catalog/data-lineage

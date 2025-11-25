@@ -14,7 +14,7 @@ export interface Dashboard {
   type?: 'dashboard' | 'chat'; // 'dashboard' is default, 'chat' opens chat overlay
 }
 
-export type Page = 'dashboard' | 'profile' | 'config' | 'chat' | 'editor';
+export type Page = 'dashboard' | 'profile' | 'config' | 'chat' | 'editor' | 'explorer';
 
 export type AggregationType = 'avg' | 'max' | 'min' | 'sum' | 'count' | 'count_distinct';
 

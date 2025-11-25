@@ -4,13 +4,14 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes import router as api_router
 from app.api.routes_files import router as files_router
+from app.api.routes_explorer import router as explorer_router
 
 app = FastAPI()
 
 # CORS configuration for development
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000", "http://127.0.0.1:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -18,6 +19,7 @@ app.add_middleware(
 
 app.include_router(api_router, prefix="/api")
 app.include_router(files_router, prefix="/api")
+app.include_router(explorer_router, prefix="/api")
 
 # Mount static files (frontend build)
 # Check if the static directory exists (it will in production/deployment)

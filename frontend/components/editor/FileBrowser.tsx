@@ -223,7 +223,7 @@ export const FileBrowser: React.FC<FileBrowserProps> = ({ onSelectFile, currentF
     return (
         <>
             <div className="flex flex-col h-full bg-gray-900 border-r border-gray-700 select-none">
-                <div className="p-3 border-b border-gray-700 font-semibold text-sm text-gray-300 flex justify-between items-center">
+                <div className="h-14 px-3 border-b border-gray-700 font-semibold text-sm text-gray-300 flex justify-between items-center shrink-0">
                     <span>Explorer</span>
                     <div className="flex gap-2">
                         <button 

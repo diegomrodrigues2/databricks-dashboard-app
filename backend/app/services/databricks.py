@@ -20,6 +20,62 @@ class DatabricksService:
         config = get_databricks_config()
         if not config:
             # Mock SQL execution
+            if "samples.nyctaxi.trips" in query:
+                return {
+                    "result": {
+                        "schema": {
+                            "columns": [
+                                {"name": "tpep_pickup_datetime", "type": "string"},
+                                {"name": "tpep_dropoff_datetime", "type": "string"},
+                                {"name": "trip_distance", "type": "double"},
+                                {"name": "fare_amount", "type": "double"},
+                                {"name": "pickup_zip", "type": "int"},
+                                {"name": "dropoff_zip", "type": "int"}
+                            ]
+                        },
+                        "data_array": [
+                            ["2023-01-01 00:00:00", "2023-01-01 00:15:00", 2.5, 15.0, 10001, 10002],
+                            ["2023-01-01 00:10:00", "2023-01-01 00:35:00", 5.1, 25.5, 10003, 10004],
+                            ["2023-01-01 00:20:00", "2023-01-01 00:25:00", 0.8, 7.0, 10001, 10001]
+                        ]
+                    }
+                }
+            elif "main.default.users" in query:
+                return {
+                    "result": {
+                        "schema": {
+                            "columns": [
+                                {"name": "id", "type": "int"},
+                                {"name": "name", "type": "string"},
+                                {"name": "email", "type": "string"},
+                                {"name": "created_at", "type": "string"}
+                            ]
+                        },
+                        "data_array": [
+                            [1, "John Doe", "john@example.com", "2023-01-01"],
+                            [2, "Jane Smith", "jane@example.com", "2023-01-02"],
+                            [3, "Bob Johnson", "bob@example.com", "2023-01-03"]
+                        ]
+                    }
+                }
+            elif "main.default.transactions" in query:
+                return {
+                    "result": {
+                        "schema": {
+                            "columns": [
+                                {"name": "transaction_id", "type": "string"},
+                                {"name": "amount", "type": "double"},
+                                {"name": "currency", "type": "string"}
+                            ]
+                        },
+                        "data_array": [
+                            ["tx_001", 100.50, "USD"],
+                            ["tx_002", 50.25, "EUR"],
+                            ["tx_003", 200.00, "USD"]
+                        ]
+                    }
+                }
+
             return {
                 "result": {
                     "schema": {"columns": [{"name": "result", "type": "string"}]},
@@ -137,5 +193,144 @@ class DatabricksService:
         response = requests.post(url, json=payload, headers=headers)
         response.raise_for_status()
         return {"message": "File saved successfully", "path": path}
+
+    def list_catalogs(self):
+        """
+        Recupera a lista de catálogos do metastore atual.
+        Utiliza o endpoint GET /api/2.1/unity-catalog/catalogs.
+        """
+        config = get_databricks_config()
+        if not config:
+            # Mock catalogs
+            return [
+                {"name": "main", "comment": "Main catalog"},
+                {"name": "samples", "comment": "Sample datasets"}
+            ]
+
+        url = f"{config.host.rstrip('/')}/api/2.1/unity-catalog/catalogs"
+        headers = self._get_headers(config)
+        
+        catalogs = []
+        page_token = None
+        
+        while True:
+            params = {}
+            if page_token:
+                params['page_token'] = page_token
+                
+            try:
+                response = requests.get(url, headers=headers, params=params)
+                response.raise_for_status()
+                data = response.json()
+                
+                if 'catalogs' in data:
+                    catalogs.extend(data['catalogs'])
+                
+                page_token = data.get('next_page_token')
+                if not page_token:
+                    break
+                    
+            except requests.exceptions.RequestException as e:
+                # Log error appropriate to production environment
+                raise ValueError(f"Falha ao listar catálogos: {str(e)}")
+
+        return catalogs
+
+    def list_schemas(self, catalog_name: str):
+        """
+        Lista esquemas dentro de um catálogo específico.
+        Endpoint: GET /api/2.1/unity-catalog/schemas
+        """
+        config = get_databricks_config()
+        if not config:
+            # Mock schemas
+            if catalog_name == "main":
+                return [
+                    {"name": "default", "catalog_name": "main", "comment": "Default schema"},
+                    {"name": "analytics", "catalog_name": "main", "comment": "Analytics data"}
+                ]
+            elif catalog_name == "samples":
+                return [
+                    {"name": "nyctaxi", "catalog_name": "samples", "comment": "NYC Taxi data"},
+                    {"name": "tpch", "catalog_name": "samples", "comment": "TPC-H benchmark data"}
+                ]
+            return []
+
+        url = f"{config.host.rstrip('/')}/api/2.1/unity-catalog/schemas"
+        headers = self._get_headers(config)
+        
+        schemas = []
+        page_token = None
+
+        while True:
+            params = {'catalog_name': catalog_name}
+            if page_token:
+                params['page_token'] = page_token
+
+            try:
+                response = requests.get(url, headers=headers, params=params)
+                response.raise_for_status()
+                data = response.json()
+
+                if 'schemas' in data:
+                    schemas.extend(data['schemas'])
+
+                page_token = data.get('next_page_token')
+                if not page_token:
+                    break
+            except requests.exceptions.RequestException as e:
+                 raise ValueError(f"Falha ao listar esquemas: {str(e)}")
+        
+        return schemas
+
+    def list_tables(self, catalog_name: str, schema_name: str):
+        """
+        Lista tabelas e views dentro de um esquema.
+        Endpoint: GET /api/2.1/unity-catalog/tables
+        """
+        config = get_databricks_config()
+        if not config:
+            # Mock tables
+            if catalog_name == "samples" and schema_name == "nyctaxi":
+                 return [
+                    {"name": "trips", "catalog_name": "samples", "schema_name": "nyctaxi", "table_type": "MANAGED", "full_name": "samples.nyctaxi.trips"}
+                 ]
+            elif catalog_name == "main" and schema_name == "default":
+                 return [
+                     {"name": "users", "catalog_name": "main", "schema_name": "default", "table_type": "MANAGED", "full_name": "main.default.users"},
+                     {"name": "transactions", "catalog_name": "main", "schema_name": "default", "table_type": "EXTERNAL", "full_name": "main.default.transactions"}
+                 ]
+            return []
+        
+        url = f"{config.host.rstrip('/')}/api/2.1/unity-catalog/tables"
+        headers = self._get_headers(config)
+        
+        tables = []
+        page_token = None
+
+        while True:
+            params = {
+                'catalog_name': catalog_name, 
+                'schema_name': schema_name,
+                'omit_columns': 'true' # Performance optimization
+            }
+            if page_token:
+                params['page_token'] = page_token
+            
+            try:
+                response = requests.get(url, headers=headers, params=params)
+                response.raise_for_status()
+                data = response.json()
+                
+                if 'tables' in data:
+                    tables.extend(data['tables'])
+                
+                page_token = data.get('next_page_token')
+                if not page_token:
+                    break
+            except requests.exceptions.RequestException as e:
+                raise ValueError(f"Falha ao listar tabelas: {str(e)}")
+        
+        return tables
 
 databricks_service = DatabricksService()

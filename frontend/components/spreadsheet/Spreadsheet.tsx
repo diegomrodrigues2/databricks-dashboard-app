@@ -9,6 +9,7 @@ interface SpreadsheetProps {
     data: any[];
     onClose: () => void;
     isEditable?: boolean;
+    hideHeader?: boolean;
 }
 
 const copyToClipboard = (text: string) => {
@@ -73,6 +74,19 @@ type Action =
 function spreadsheetReducer(state: State, action: Action): State {
     switch (action.type) {
         case 'SET_DATA': {
+             // Guard clause: if payload is null/undefined, handle it gracefully
+             if (!action.payload) {
+                return {
+                    ...state,
+                    originalData: [],
+                    columns: [],
+                    filters: {},
+                    sort: null,
+                    selection: new Set(),
+                    lastSelectedCell: null,
+                    isDragging: false,
+                };
+             }
              const columns = action.payload.length > 0 ? Object.keys(action.payload[0]) : [];
              return {
                 ...state,
@@ -205,7 +219,7 @@ function spreadsheetReducer(state: State, action: Action): State {
     }
 }
 
-const Spreadsheet: React.FC<SpreadsheetProps> = ({ title, data, onClose, isEditable = false }) => {
+const Spreadsheet: React.FC<SpreadsheetProps> = ({ title, data, onClose, isEditable = false, hideHeader = false }) => {
     const initialState: State = {
         originalData: [],
         columns: [],
@@ -388,12 +402,14 @@ const Spreadsheet: React.FC<SpreadsheetProps> = ({ title, data, onClose, isEdita
             onMouseUp={() => dispatch({ type: 'END_DRAG_SELECTION' })}
             onMouseLeave={() => state.isDragging && dispatch({ type: 'END_DRAG_SELECTION' })}
         >
-            <div className="flex justify-between items-center mb-4">
-                <h2 className="text-xl font-semibold text-gray-100">{title}</h2>
-                <button onClick={onClose} className="p-2 rounded-full hover:bg-gray-700">
-                    <XIcon className="w-6 h-6 text-gray-400" />
-                </button>
-            </div>
+            {!hideHeader && (
+                <div className="flex justify-between items-center mb-4">
+                    <h2 className="text-xl font-semibold text-gray-100">{title}</h2>
+                    <button onClick={onClose} className="p-2 rounded-full hover:bg-gray-700">
+                        <XIcon className="w-6 h-6 text-gray-400" />
+                    </button>
+                </div>
+            )}
             <div className="flex-grow min-h-0">
                 <SpreadsheetGrid
                     columns={state.columns}

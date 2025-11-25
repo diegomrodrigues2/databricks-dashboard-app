@@ -7,6 +7,7 @@ import DashboardPage from './pages/DashboardPage';
 import ProfilePage from './pages/ProfilePage';
 import ConfigPage from './pages/ConfigPage';
 import EditorPage from './pages/EditorPage';
+import DatabaseExplorerPage from './pages/DatabaseExplorerPage';
 import ChatWindow from './components/chat/ChatWindow';
 import MainLayout from './layouts/MainLayout';
 import Spreadsheet from './components/spreadsheet/Spreadsheet';
@@ -53,6 +54,8 @@ const App: React.FC = () => {
         return <ChatWindow />;
       case 'editor':
         return <EditorPage onNavigate={handleNavigate} />;
+      case 'explorer':
+        return <DatabaseExplorerPage onNavigate={handleNavigate} />;
       default:
         return <DashboardPage dashboardId={currentDashboardId} />;
     }
