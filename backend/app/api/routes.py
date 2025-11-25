@@ -13,6 +13,8 @@ class ConfigResponse(BaseModel):
     host: str
     warehouse_id: str
     has_token: bool
+    serving_endpoint: str = ""
+    model_name: str = ""
 
 @router.post("/config")
 async def update_config(config: DatabricksConfig):
@@ -30,7 +32,9 @@ async def get_config():
     return ConfigResponse(
         host=app_config.databricks.host,
         warehouse_id=app_config.databricks.warehouse_id,
-        has_token=bool(app_config.databricks.token)
+        has_token=bool(app_config.databricks.token),
+        serving_endpoint=app_config.databricks.serving_endpoint or "",
+        model_name=app_config.databricks.model_name or ""
     )
 
 @router.post("/query")

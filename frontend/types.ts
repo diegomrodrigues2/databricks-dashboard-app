@@ -1,4 +1,11 @@
 
+export interface SystemConfig {
+  host: string;
+  warehouse_id: string;
+  has_token: boolean;
+  serving_endpoint?: string;
+  model_name?: string;
+}
 
 export interface User {
   id: string;

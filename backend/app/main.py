@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes import router as api_router
 from app.api.routes_files import router as files_router
 from app.api.routes_explorer import router as explorer_router
+from app.api.routes_chat import router as chat_router
 
 app = FastAPI()
 
@@ -20,6 +21,7 @@ app.add_middleware(
 app.include_router(api_router, prefix="/api")
 app.include_router(files_router, prefix="/api")
 app.include_router(explorer_router, prefix="/api")
+app.include_router(chat_router, prefix="/api")
 
 # Mount static files (frontend build)
 # Check if the static directory exists (it will in production/deployment)

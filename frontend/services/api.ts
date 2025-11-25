@@ -1,8 +1,22 @@
-export const saveConfig = async (host: string, token: string, warehouseId: string) => {
+import { SystemConfig } from '../types';
+
+export const saveConfig = async (
+  host: string, 
+  token: string, 
+  warehouseId: string,
+  servingEndpoint?: string,
+  modelName?: string
+) => {
   const response = await fetch('/api/config', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ host, token, warehouse_id: warehouseId }),
+    body: JSON.stringify({ 
+      host, 
+      token, 
+      warehouse_id: warehouseId,
+      serving_endpoint: servingEndpoint,
+      model_name: modelName
+    }),
   });
   if (!response.ok) {
     throw new Error('Failed to save configuration');
@@ -10,7 +24,7 @@ export const saveConfig = async (host: string, token: string, warehouseId: strin
   return response.json();
 };
 
-export const getConfig = async () => {
+export const getConfig = async (): Promise<SystemConfig> => {
   const response = await fetch('/api/config');
   if (!response.ok) {
     throw new Error('Failed to load configuration');
@@ -30,4 +44,3 @@ export const executeQuery = async (query: string, language: string = 'sql') => {
   }
   return response.json();
 };
-

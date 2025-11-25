@@ -9,6 +9,8 @@ class DatabricksConfig(BaseModel):
     host: str
     token: str
     warehouse_id: str
+    serving_endpoint: Optional[str] = None
+    model_name: Optional[str] = None
 
 class AppConfig(BaseModel):
     databricks: Optional[DatabricksConfig] = None
@@ -34,9 +36,17 @@ def get_databricks_config() -> Optional[DatabricksConfig]:
     host = os.getenv("DATABRICKS_HOST")
     token = os.getenv("DATABRICKS_TOKEN")
     warehouse_id = os.getenv("DATABRICKS_WAREHOUSE_ID")
+    serving_endpoint = os.getenv("DATABRICKS_SERVING_ENDPOINT")
+    model_name = os.getenv("DATABRICKS_MODEL_NAME")
     
     if host and token and warehouse_id:
-        return DatabricksConfig(host=host, token=token, warehouse_id=warehouse_id)
+        return DatabricksConfig(
+            host=host, 
+            token=token, 
+            warehouse_id=warehouse_id,
+            serving_endpoint=serving_endpoint,
+            model_name=model_name
+        )
         
     return config.databricks
 

@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useReducer, useMemo, useCallback, useEffect } from 'react';
+import React, { createContext, useContext, useReducer, useMemo, useCallback, useEffect, useRef } from 'react';
 import type { Message, ToolCall, Session, StructuredInquiry, TreeMessage, AgentDefinition } from '../types';
 import { streamChatResponse } from '../services/chatService';
 import { parseStreamedContent } from '../utils/streamParser';
@@ -262,10 +262,6 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
     }
 
     case 'SUBMIT_DECISION':
-        // Logic slightly different for tree: we just update the node that holds the inquiry
-        // But we need to find it. 
-        // Optimization: The payload should probably include messageId or we scan the thread.
-        // For now, let's assume we scan the active thread.
         const activeThread = getThreadFromLeaf(state.currentLeafId, state.messageMap);
         const targetMsg = activeThread.find(m => m.structuredInquiry?.id === action.payload.inquiryId);
         
@@ -327,12 +323,14 @@ interface ChatContextType {
   switchAgent: (agentId: string) => void;
   editUserMessage: (originalMessageId: string, newContent: string) => Promise<void>;
   addSystemMessage: (content: string) => void;
+  stopGeneration: () => void;
 }
 
 const ChatContext = createContext<ChatContextType | undefined>(undefined);
 
 export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [state, dispatch] = useReducer(chatReducer, initialState);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   // Derive linear messages from the tree state for UI consumption
   const messages = useMemo(() => 
@@ -453,6 +451,14 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
     dispatch({ type: 'ADD_SYSTEM_MESSAGE', payload: systemMessage });
   }, [state.currentLeafId]);
 
+  const stopGeneration = useCallback(() => {
+      if (abortControllerRef.current) {
+          abortControllerRef.current.abort();
+          abortControllerRef.current = null;
+          dispatch({ type: 'SET_STATUS', payload: 'idle' });
+      }
+  }, []);
+
 
   const executeToolCall = async (command: { tool: string, params: string }) => {
       try {
@@ -493,6 +499,10 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const processResponseLoop = async (initialHistory: Message[]) => {
+      // Create new AbortController for this loop
+      abortControllerRef.current = new AbortController();
+      const signal = abortControllerRef.current.signal;
+
       let currentHistory = [...initialHistory];
       // Last message in history is the leaf
       let currentParentId = currentHistory[currentHistory.length - 1].id;
@@ -504,102 +514,114 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // Get active agent definition
       const currentAgent = agentRegistry.getAgent(state.activeAgentId);
 
-      while (continueLoop && loopCount < MAX_LOOPS) {
-          loopCount++;
-          
-          let currentAssistantMessageId = `${Date.now()}-assistant-${loopCount}`;
-          const assistantMessage: TreeMessage = {
-              id: currentAssistantMessageId,
-              role: 'assistant',
-              content: '',
-              timestamp: new Date(),
-              parentId: currentParentId,
-              childrenIds: []
-          };
-          
-          dispatch({ type: 'ADD_ASSISTANT_MESSAGE', payload: assistantMessage });
-          // Update parent pointer for next iteration
-          currentParentId = currentAssistantMessageId;
-          
-          let accumulatedResponse = '';
-          let toolFound = false;
-          
-          try {
-              // Pass Agent Definition to Service
-              await streamChatResponse(
-                  currentHistory, 
-                  currentAgent, 
-                  undefined, // SessionConfig to be added later
-                  (chunk) => {
-                  accumulatedResponse += chunk;
-                  dispatch({
-                      type: 'RECEIVE_TOKEN',
-                      payload: { messageId: currentAssistantMessageId, chunk },
-                  });
-              });
-          } catch (error) {
-              console.error("Failed to stream response:", error);
-               dispatch({
-                type: 'UPDATE_STREAM',
-                payload: {
-                  messageId: currentAssistantMessageId,
-                  content: "\n\n*Error: Failed to generate response.*",
-                },
-              });
-              dispatch({ type: 'SET_STATUS', payload: 'idle' });
-              return;
-          }
+      try {
+        while (continueLoop && loopCount < MAX_LOOPS) {
+            if (signal.aborted) break;
+            loopCount++;
+            
+            let currentAssistantMessageId = `${Date.now()}-assistant-${loopCount}`;
+            const assistantMessage: TreeMessage = {
+                id: currentAssistantMessageId,
+                role: 'assistant',
+                content: '',
+                timestamp: new Date(),
+                parentId: currentParentId,
+                childrenIds: []
+            };
+            
+            dispatch({ type: 'ADD_ASSISTANT_MESSAGE', payload: assistantMessage });
+            // Update parent pointer for next iteration
+            currentParentId = currentAssistantMessageId;
+            
+            let accumulatedResponse = '';
+            
+            try {
+                // Pass Agent Definition to Service
+                await streamChatResponse(
+                    currentHistory, 
+                    currentAgent, 
+                    undefined, // SessionConfig to be added later
+                    (chunk) => {
+                        if (signal.aborted) return; 
+                        accumulatedResponse += chunk;
+                        dispatch({
+                            type: 'RECEIVE_TOKEN',
+                            payload: { messageId: currentAssistantMessageId, chunk },
+                        });
+                    },
+                    signal
+                );
+            } catch (error: any) {
+                if (error.name === 'AbortError' || signal.aborted) {
+                     console.log("Aborted");
+                     break;
+                }
 
-          const { command } = parseStreamedContent(accumulatedResponse);
-          
-          // Update history with the full assistant message
-           const assistantMsgFinished: Message = {
-              id: currentAssistantMessageId,
-              role: 'assistant',
-              content: accumulatedResponse,
-              timestamp: new Date()
-          };
-          currentHistory = [...currentHistory, assistantMsgFinished];
+                console.error("Failed to stream response:", error);
+                dispatch({
+                    type: 'UPDATE_STREAM',
+                    payload: {
+                    messageId: currentAssistantMessageId,
+                    content: "\n\n*Error: Failed to generate response.*",
+                    },
+                });
+                break; 
+            }
 
-          if (command) {
-              if (command.tool === 'ask_user') {
-                   try {
-                       const inquiry = JSON.parse(command.params) as StructuredInquiry;
-                       dispatch({ 
-                           type: 'SET_INQUIRY', 
-                           payload: { messageId: currentAssistantMessageId, inquiry } 
-                       });
-                       // Break the loop and wait for user
-                       return; 
-                   } catch (e) {
-                       console.error("Failed to parse inquiry", e);
-                   }
-              }
-              
-              dispatch({ type: 'SET_STATUS', payload: 'executing_tool' });
-              const result = await executeToolCall(command);
+            if (signal.aborted) break;
 
-              const systemMessage: TreeMessage = {
-                  id: `${Date.now()}-system`,
-                  role: 'system',
-                  content: JSON.stringify(result),
-                  timestamp: new Date(),
-                  parentId: currentParentId,
-                  childrenIds: []
-              };
+            const { command } = parseStreamedContent(accumulatedResponse);
+            
+            // Update history with the full assistant message
+            const assistantMsgFinished: Message = {
+                id: currentAssistantMessageId,
+                role: 'assistant',
+                content: accumulatedResponse,
+                timestamp: new Date()
+            };
+            currentHistory = [...currentHistory, assistantMsgFinished];
 
-              dispatch({ type: 'ADD_SYSTEM_MESSAGE', payload: systemMessage });
-              // Update parent pointer
-              currentParentId = systemMessage.id;
-              
-              currentHistory = [...currentHistory, systemMessage];
-              // Continue loop to get next response from assistant based on tool result
-          } else {
-              continueLoop = false;
-          }
+            if (command) {
+                if (command.tool === 'ask_user') {
+                    try {
+                        const inquiry = JSON.parse(command.params) as StructuredInquiry;
+                        dispatch({ 
+                            type: 'SET_INQUIRY', 
+                            payload: { messageId: currentAssistantMessageId, inquiry } 
+                        });
+                        // Break the loop and wait for user
+                        return; 
+                    } catch (e) {
+                        console.error("Failed to parse inquiry", e);
+                    }
+                }
+                
+                dispatch({ type: 'SET_STATUS', payload: 'executing_tool' });
+                const result = await executeToolCall(command);
+
+                const systemMessage: TreeMessage = {
+                    id: `${Date.now()}-system`,
+                    role: 'system',
+                    content: JSON.stringify(result),
+                    timestamp: new Date(),
+                    parentId: currentParentId,
+                    childrenIds: []
+                };
+
+                dispatch({ type: 'ADD_SYSTEM_MESSAGE', payload: systemMessage });
+                // Update parent pointer
+                currentParentId = systemMessage.id;
+                
+                currentHistory = [...currentHistory, systemMessage];
+                // Continue loop to get next response from assistant based on tool result
+            } else {
+                continueLoop = false;
+            }
+        }
+      } finally {
+         abortControllerRef.current = null;
+         dispatch({ type: 'SET_STATUS', payload: 'idle' });
       }
-      
-      dispatch({ type: 'SET_STATUS', payload: 'idle' });
   };
 
   const sendMessage = useCallback(async (content: string) => {
@@ -627,7 +649,7 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const currentHistory = [...messages, userMessage];
     
     await processResponseLoop(currentHistory);
-  }, [state.messageMap, state.currentLeafId, state.currentSessionId, messages, state.activeAgentId]); // Added dependencies
+  }, [state.messageMap, state.currentLeafId, state.currentSessionId, messages, state.activeAgentId]); 
 
   const submitDecision = useCallback(async (inquiryId: string, value: any) => {
       // 1. Dispatch local state update
@@ -657,13 +679,6 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
       dispatch({ type: 'ADD_SYSTEM_MESSAGE', payload: decisionMsg });
 
       // 3. Resume the chat loop
-      // Need to reconstruct history with the decision embedded
-      // We can assume the decision update happened in the reducer, so 'messages' is stale
-      // But processResponseLoop takes a history array.
-      
-      // NOTE: In a real tree implementation, we would fetch the fresh thread from state
-      // But since we are inside a closure, we need to rely on the fact that the reducer runs synchronously?
-      // No, React state updates are async.
       
       // Temporary workaround: Manually construct the 'next' history state locally for the loop
       const updatedMessages = messages.map(msg => {
@@ -752,9 +767,10 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
       navigateBranch,
       editUserMessage,
       switchAgent,
-      addSystemMessage
+      addSystemMessage,
+      stopGeneration
     }),
-    [state.isChatOpen, messages, state.status, state.activeToolCallId, state.currentSessionId, state.activeAgentId, toggleChat, sendMessage, startNewSessionWithContext, submitDecision, clearMessages, loadSession, createNewSession, renameSession, deleteSession, clearAllHistory, navigateBranch, editUserMessage, switchAgent, addSystemMessage]
+    [state.isChatOpen, messages, state.status, state.activeToolCallId, state.currentSessionId, state.activeAgentId, toggleChat, sendMessage, startNewSessionWithContext, submitDecision, clearMessages, loadSession, createNewSession, renameSession, deleteSession, clearAllHistory, navigateBranch, editUserMessage, switchAgent, addSystemMessage, stopGeneration]
   );
 
   return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>;

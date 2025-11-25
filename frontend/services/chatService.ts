@@ -1,23 +1,29 @@
 import { Message, AgentDefinition, SessionConfig } from '../types';
 import { generateSystemPrompt } from './chat/promptFactory';
 import { fruitSalesDashboardConfig } from './dashboards/fruitSales';
+import { getConfig } from './api';
 import { WIDGET_START_TOKEN, WIDGET_END_TOKEN } from '../utils/chatProtocol';
-
-// Environment variables (mocked for now if not present)
-const DATABRICKS_ENDPOINT_URL = process.env.DATABRICKS_ENDPOINT_URL || 'https://example.cloud.databricks.com/serving-endpoints/chat-bot/invocations';
-const DATABRICKS_TOKEN = process.env.DATABRICKS_TOKEN || 'mock-token';
 
 export async function streamChatResponse(
   messages: Message[],
   agent: AgentDefinition | undefined,
   sessionConfig: SessionConfig | undefined,
-  onChunk: (chunk: string) => void
+  onChunk: (chunk: string) => void,
+  signal?: AbortSignal
 ): Promise<void> {
-  // Toggle this to switch between mock and real backend
-  const USE_MOCK = true;
+  
+  let config;
+  try {
+      config = await getConfig();
+  } catch (e) {
+      console.warn("Failed to load system config, falling back to mock.");
+  }
 
-  if (USE_MOCK) {
-    await streamMockResponse(messages, onChunk);
+  const shouldUseRealBackend = !!config?.serving_endpoint && !!config?.has_token;
+
+  if (!shouldUseRealBackend) {
+    console.log("Using Mock Response (No Serving Endpoint configured)");
+    await streamMockResponse(messages, onChunk, signal);
     return;
   }
 
@@ -34,22 +40,21 @@ export async function streamChatResponse(
         }))
     ];
 
-    const response = await fetch(DATABRICKS_ENDPOINT_URL, {
+    const response = await fetch('/api/chat/completions', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${DATABRICKS_TOKEN}`,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
         messages: apiMessages,
-        stream: true, // Critical for token-by-token updates
-        max_tokens: 2000,
+        endpoint_name: config?.serving_endpoint, // Optional override
         temperature: sessionConfig?.modelTemperature || 0.7
-      })
+      }),
+      signal
     });
 
     if (!response.ok) {
-      throw new Error(`Databricks API Error: ${response.status} ${response.statusText}`);
+      throw new Error(`Backend API Error: ${response.status} ${response.statusText}`);
     }
 
     const reader = response.body?.getReader();
@@ -59,51 +64,72 @@ export async function streamChatResponse(
       throw new Error("Response body is not readable");
     }
 
+    let buffer = "";
+
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
       
       const chunk = decoder.decode(value, { stream: true });
+      buffer += chunk;
       
       // Parse Databricks/OpenAI SSE format "data: {...}"
-      const lines = chunk.split('\n').filter(line => line.trim() !== '');
+      // We process complete lines
+      const lines = buffer.split('\n');
       
+      // Keep the last line in buffer if it's incomplete (doesn't end with \n)
+      // actually split removes the separator, so we check if the last char of chunk was \n
+      // A safer way for SSE is to split by \n\n or \n and handle the buffer carefully.
+      // Here we'll assume standard SSE double newline or single newline.
+      
+      buffer = lines.pop() || ""; // The last element is either empty (if ends with \n) or the partial line
+
       for (const line of lines) {
-        if (line.trim() === 'data: [DONE]') return;
+        if (line.trim() === '' || line.trim() === 'data: [DONE]') continue;
         
         if (line.startsWith('data: ')) {
             try {
-                const json = JSON.parse(line.substring(6));
-                // Adjust this path based on the actual response structure from Databricks Serving
+                const jsonStr = line.substring(6);
+                // Handle potential error messages from backend
+                const json = JSON.parse(jsonStr);
+                
+                if (json.error) {
+                     console.error("Backend Stream Error:", json.error);
+                     onChunk(`\n\n*System Error: ${json.error}*`);
+                     return;
+                }
+
                 const content = json.choices?.[0]?.delta?.content;
                 if (content) {
                     onChunk(content);
                 }
             } catch (e) {
-                console.warn("Error parsing SSE chunk", e);
+                console.warn("Error parsing SSE chunk", e, line);
             }
         }
       }
     }
-  } catch (error) {
+  } catch (error: any) {
+    if (error.name === 'AbortError') {
+        console.log('Stream aborted by user');
+        return;
+    }
     console.error("Error streaming chat response:", error);
-    // In a real app, you might want to notify the user of the error via onChunk or a separate callback
-    onChunk("\n\n*Error: Failed to connect to the data assistant.*");
+    onChunk(`\n\n*Error: Failed to connect to the data assistant. Details: ${error.message}*`);
   }
 }
 
 // --- Mock Implementation ---
 
-const MOCK_DELAY_MS = 15; // Faster typing for better DX
+const MOCK_DELAY_MS = 15; 
 
 interface MockScenario {
-    steps: (string | ((lastMsg: Message) => string))[]; // Step 0: Thought+Command, Step 1: Response+Widget
+    steps: (string | ((lastMsg: Message) => string))[]; 
 }
 
 const MOCK_SCENARIOS: MockScenario[] = [
     {
         steps: [
-            // Step 1: Thought and Command
             `<thought>
 The user wants to analyze mango revenue trends. 
 I should first check the 'mango_revenue' table to get the quarterly data.
@@ -114,7 +140,6 @@ A waterfall chart is the best visualization for showing positive and negative co
 { "dataSource": "mango_revenue", "query": "quarterly revenue changes" }
 </command>`,
             
-            // Step 2: Final Response
             `Based on the revenue data, here is the quarterly breakdown. You can see how specific quarters contributed to the total growth.
 
 ${WIDGET_START_TOKEN}
@@ -138,7 +163,6 @@ Notice the dip in Q3 2023. This correlates with the seasonal supply shortage we 
     },
     {
         steps: [
-            // Step 1
             `<thought>
 The user is asking for a correlation analysis between sweetness and juiciness.
 I need to query the 'fruit_taste_data' table which contains these metrics for all fruits.
@@ -149,7 +173,6 @@ I will also highlight the 'sweet and juicy' quadrant (high sweetness, high juici
 { "dataSource": "fruit_taste_data", "query": "sweetness and juiciness by fruit" }
 </command>`,
 
-            // Step 2
             `I've plotted the sweetness against juiciness for all our fruits. This should help identify which fruits fit the 'sweet and juicy' profile.
 
 ${WIDGET_START_TOKEN}
@@ -173,7 +196,6 @@ Mangoes and Strawberries are clearly in the top-right quadrant, indicating they 
     },
     {
         steps: [
-            // Step 1
             `<thought>
 The user wants a detailed breakdown of fruit metrics (sales, price, taste).
 A tabular view is most appropriate here to show multiple dimensions at once.
@@ -184,7 +206,6 @@ I'll add a data bar to the sales column to make it easier to scan for high perfo
 { "dataSource": "fruit_taste_data", "query": "all metrics" }
 </command>`,
 
-            // Step 2
             `Here is the detailed data table you requested, showing average sales, price, and taste metrics for each fruit.
 
 ${WIDGET_START_TOKEN}
@@ -212,7 +233,6 @@ You can export this table to CSV if you need to perform further analysis in Exce
     },
     {
         steps: [
-            // Step 1: Ask User
             `<thought>
 The user wants to delete the 'fruit_sales' table. This is a destructive operation.
 I must ask for explicit confirmation before proceeding.
@@ -230,7 +250,6 @@ I must ask for explicit confirmation before proceeding.
 }
 </command>`,
             
-            // Step 2: Handle Confirmation
             `<thought>
 User confirmed the deletion. Proceeding with the drop operation.
 </thought>
@@ -244,10 +263,8 @@ I have successfully deleted the 'fruit_sales' table as requested.
 </widget>`
         ]
     },
-    // New Scenario: Selection (Dynamic)
     {
         steps: [
-             // Step 1
             `<thought>
 The user wants to see the top performing fruits. I can display this data by Total Sales (Revenue) or by Quantity Sold.
 I should ask the user which metric they prefer to ensure I show the most relevant data.
@@ -264,9 +281,8 @@ I should ask the user which metric they prefer to ensure I show the most relevan
 }
 </command>`,
 
-            // Step 2 (Dynamic)
             (lastMsg: Message) => {
-                let decisionValue = 'revenue'; // default
+                let decisionValue = 'revenue'; 
                 try {
                     const decision = JSON.parse(lastMsg.content);
                     if (decision && decision.value) {
@@ -279,7 +295,7 @@ I should ask the user which metric they prefer to ensure I show the most relevan
                 const valueColumn = isRevenue ? "total_sales" : "total_quantity";
                 const format = isRevenue ? "currency" : "number";
                 const currencySymbol = isRevenue ? "$" : undefined;
-                const color = isRevenue ? "#10B981" : "#8B5CF6"; // Green for money, Purple for units
+                const color = isRevenue ? "#10B981" : "#8B5CF6"; 
 
                 return `<thought>
 User selected to rank by ${decisionValue}. Querying data sorted by ${valueColumn}.
@@ -304,10 +320,8 @@ ${WIDGET_END_TOKEN}`;
             }
         ]
     },
-    // New Scenario: Parameter Input (Dynamic)
     {
         steps: [
-            // Step 1
             `<thought>
 The user wants to set a sales target for the dashboard gauge.
 I need to know the specific target amount to configure the visualization correctly.
@@ -322,7 +336,6 @@ I need to know the specific target amount to configure the visualization correct
 }
 </command>`,
 
-            // Step 2 (Dynamic)
             (lastMsg: Message) => {
                 let targetValue = 50000;
                 try {
@@ -332,7 +345,6 @@ I need to know the specific target amount to configure the visualization correct
                     }
                 } catch (e) { console.error(e); }
 
-                // Cap at reasonable limits for the mock visualization
                 const maxVal = Math.max(targetValue * 1.2, 60000);
 
                 return `<thought>
@@ -363,10 +375,8 @@ ${WIDGET_END_TOKEN}`;
             }
         ]
     },
-    // New Scenario: Code Execution (Dynamic)
     {
         steps: [
-            // Step 1: Assistant proposes SQL
             `<thought>
 The user wants to inspect the raw data for 'fruit_sales'.
 I will provide a SQL query to select the top records.
@@ -387,7 +397,6 @@ ${WIDGET_START_TOKEN}
 }
 ${WIDGET_END_TOKEN}`,
 
-            // Step 2: Handle Execution Result
             (lastMsg: Message) => {
                 let rowCount = "some";
                 try {
@@ -410,30 +419,25 @@ You can now analyze this data in the table above or modify the query to refine y
 
 let lastScenarioIndex = -1;
 
-async function streamMockResponse(messages: Message[], onChunk: (chunk: string) => void) {
+async function streamMockResponse(messages: Message[], onChunk: (chunk: string) => void, signal?: AbortSignal) {
   const lastMsg = messages[messages.length - 1];
   
-  // Check if the last message is a tool result (System message)
-  // In our plan, we decided to use 'system' role for tool results
-  const isToolResult = lastMsg.role === 'system'; // Simple heuristic for now
+  const isToolResult = lastMsg.role === 'system';
 
   let scenarioIndex;
   let stepIndex;
 
   if (!isToolResult) {
-      // This is a new user request, pick the next scenario
       scenarioIndex = (lastScenarioIndex + 1) % MOCK_SCENARIOS.length;
       lastScenarioIndex = scenarioIndex;
       stepIndex = 0;
   } else {
-      // This is a continuation (tool result), use the current scenario
       scenarioIndex = lastScenarioIndex;
-      if (scenarioIndex === -1) scenarioIndex = 0; // Fallback
+      if (scenarioIndex === -1) scenarioIndex = 0; 
       stepIndex = 1;
   }
 
   const scenario = MOCK_SCENARIOS[scenarioIndex];
-  // Ensure we don't go out of bounds if a scenario is missing a step (though all have 2)
   let contentOrFn = scenario.steps[stepIndex];
   
   if (!contentOrFn) {
@@ -450,15 +454,13 @@ async function streamMockResponse(messages: Message[], onChunk: (chunk: string) 
   const tokens = splitIntoTokens(content);
 
   for (const token of tokens) {
+    if (signal?.aborted) return; // Stop if aborted
     await new Promise(resolve => setTimeout(resolve, MOCK_DELAY_MS));
     onChunk(token);
   }
 }
 
 function splitIntoTokens(text: string): string[] {
-    // improved tokenization to keep tags intact or split appropriately
-    // splitting by spaces is crude but sufficient for mock visuals
-    // Now that we have a smarter parser in streamParser.ts, we can be a bit looser here
-    // but it helps to send tags as single tokens if possible to simulate fast generation
     return text.split(/(\s+|<[^>]+>)/).filter(Boolean);
 }
+
