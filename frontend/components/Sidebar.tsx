@@ -313,11 +313,25 @@ const Sidebar: React.FC<SidebarProps> = ({ currentPage, currentDashboardId, onNa
             {/* Create Dashboard Button */}
             <button
               onClick={handleCreateDashboard}
-              className={`flex items-center p-3 mb-4 rounded-lg cursor-pointer transition-colors duration-200 w-full bg-gray-800 hover:bg-gray-700 text-gray-300 border border-gray-700 hover:border-gray-600 ${isCollapsed ? 'justify-center' : ''}`}
+              className={`flex items-center p-3 mb-2 rounded-lg cursor-pointer transition-colors duration-200 w-full bg-gray-800 hover:bg-gray-700 text-gray-300 border border-gray-700 hover:border-gray-600 ${isCollapsed ? 'justify-center' : ''}`}
               title="Create Dashboard"
             >
               <DashboardIcon className="w-5 h-5 shrink-0" />
               {!isCollapsed && <span className="text-sm font-medium ml-3">New Dashboard</span>}
+            </button>
+
+            {/* Editor Button */}
+            <button
+              onClick={() => onNavigate('editor')}
+              className={`flex items-center p-3 mb-4 rounded-lg cursor-pointer transition-colors duration-200 w-full border ${
+                  currentPage === 'editor' 
+                    ? 'bg-gray-700 text-white border-blue-500' 
+                    : 'bg-gray-800 text-gray-300 border-gray-700 hover:bg-gray-700 hover:border-gray-600'
+              } ${isCollapsed ? 'justify-center' : ''}`}
+              title="Code Editor"
+            >
+              <PencilIcon className="w-5 h-5 shrink-0" />
+              {!isCollapsed && <span className="text-sm font-medium ml-3">Editor</span>}
             </button>
 
           {!isCollapsed && <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Dashboards</h3>}
@@ -387,7 +401,7 @@ const Sidebar: React.FC<SidebarProps> = ({ currentPage, currentDashboardId, onNa
 
         </nav>
       </div>
-      <div className="p-2 border-t border-gray-700">
+      <div className="p-4 border-t border-gray-700">
          <button 
             onClick={onToggle} 
             className="w-full flex items-center justify-center p-3 rounded-lg text-gray-400 hover:bg-gray-800 hover:text-white transition-colors duration-200"

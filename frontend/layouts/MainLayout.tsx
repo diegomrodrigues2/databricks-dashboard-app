@@ -25,9 +25,15 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children, currentPage, currentD
       <div className="flex-1 flex flex-col overflow-hidden">
         <Header onNavigate={(page) => onNavigate(page)}/>
         <main className="flex-1 overflow-x-hidden overflow-y-auto bg-black bg-[radial-gradient(theme(colors.gray.800)_1px,transparent_1px)] [background-size:1rem_1rem]">
-          <div className="container mx-auto px-6 pt-8 pb-12 h-full">
-            {children}
-          </div>
+          {currentPage === 'dashboard' ? (
+            <div className="container mx-auto px-6 pt-8 pb-12 h-full">
+              {children}
+            </div>
+          ) : (
+            <div className="h-full w-full">
+              {children}
+            </div>
+          )}
         </main>
       </div>
     </div>

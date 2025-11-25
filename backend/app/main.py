@@ -2,7 +2,8 @@ import os
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from app.api.routes import router
+from app.api.routes import router as api_router
+from app.api.routes_files import router as files_router
 
 app = FastAPI()
 
@@ -15,7 +16,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(router, prefix="/api")
+app.include_router(api_router, prefix="/api")
+app.include_router(files_router, prefix="/api")
 
 # Mount static files (frontend build)
 # Check if the static directory exists (it will in production/deployment)
@@ -26,4 +28,3 @@ if os.path.exists(static_dir):
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
-

@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@monaco-editor/react": "^4.7.0",
     "d3-array": "^3.2.4",
     "d3-dsv": "^3.0.1",
     "d3-scale": "^4.0.2",
@@ -18,9 +19,10 @@
     "html-to-image": "^1.11.11",
     "lodash": "^4.17.21",
     "marked": "^12.0.2",
+    "monaco-editor": "^0.55.1",
     "prismjs": "^1.30.0",
-    "react": "^19.1.1",
-    "react-dom": "^19.1.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
     "react-grid-layout": "^1.5.2",
     "react-resizable": "^3.0.5",
     "react-simple-code-editor": "^0.14.1",

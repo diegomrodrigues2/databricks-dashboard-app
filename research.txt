@@ -1,473 +1,205 @@
-A arquitetura proposta é a de um aplicativo full-stack unificado, seguindo o padrão Backend-for-Frontend (BFF). Isso significa que o front-end React (construído com Vite) e o back-end FastAPI serão implantados juntos como um único serviço. O diagrama conceitual é:
+Plano técnico para adicionar seção de Editor de Texto no aplicativo
+Visão Geral e Objetivos
 
-Frontend (React + Vite): Interface do usuário que roda no navegador. Ele se comunica apenas com o backend FastAPI para qualquer dado ou ação do Databricks. O bundle estático do React será servido pelo próprio FastAPI em produção (evitando a necessidade de servidores separados).
+A proposta é introduzir uma nova seção "Editor" no aplicativo React + FastAPI, destinada a leitura e escrita de arquivos de texto (principalmente arquivos .sql e .md) no Databricks File System (DBFS). Essa seção permitirá que engenheiros de dados visualizem, editem e salvem scripts SQL e documentos Markdown diretamente no DBFS, dentro de uma pasta pré-definida (ou configurável). Todo acesso ao DBFS continuará sendo mediado pelo backend FastAPI (via API REST do Databricks), garantindo segurança – o front-end nunca acessa o Databricks diretamente. Em resumo, o Editor proporcionará funcionalidade de IDE leve no contexto do app, integrado também com o componente de chat/LLM para facilitar salvar trechos de código gerados pela IA. A seguir detalhamos a arquitetura, componentes, fluxos de comunicação e cuidados de segurança e UX para implementar essa funcionalidade.
 
-Backend (FastAPI): Camada intermediária que expõe uma API REST (por exemplo, rota base /api/...). O FastAPI realiza as operações no Databricks em nome do front-end, incluindo: execução de queries SQL, leitura/escrita de arquivos no DBFS e chamada de modelos/LLM no Databricks. Nenhum token ou credencial sensível é exposto ou armazenado no front-end, ficando restrito ao servidor. O FastAPI se integra com as APIs REST do Databricks utilizando o token de acesso (mantido seguro no backend).
+Componentes do Frontend (React) para o Editor
 
-Databricks Services: O Databricks passa a ser consumido via APIs REST seguras. O backend chama as APIs de SQL Warehouse para executar consultas e obter resultados, e as APIs de DBFS para manipulação de arquivos, além de eventualmente chamar endpoints de model serving ou OpenAI para LLMs, conforme necessário.
+No front-end em React (usando Vite), serão criados novos componentes e páginas para compor a seção de Editor. A estrutura modular atual (com componentes em src/components e páginas em src/pages) será estendida para incluir o Editor. Os principais componentes propostos são:
 
-Essa arquitetura garante que o aplicativo possa ser executado como um único serviço no Databricks (por ex., como um Databricks App ou em um cluster dedicado). O FastAPI pode servir os arquivos estáticos do React (gerados pelo build do Vite) e também expor as rotas de API sob o mesmo host. Assim, ao fazer o deploy, basta iniciar o servidor FastAPI – ele servirá tanto a interface (HTML/JS/CSS) quanto as APIs usadas pelo app.
+Página Editor (EditorPage): Componente de página principal (pode ser um novo entry em pages/EditorPage.tsx) responsável por renderizar a interface de edição. Este componente será ativado quando o usuário navegar para a seção "Editor" (por exemplo, via menu). Deve fazer parte do roteamento de páginas do app – por exemplo, adicionando 'editor' ao tipo Page e incluindo um case no switch do App.tsx para renderizar <EditorPage> quando currentPage === 'editor'. Também adicionaremos um item "Editor" no menu de navegação (provavelmente dentro de MainLayout) para o usuário acessar essa página.
 
-Fluxo de operação típico: O usuário interage com o React; por exemplo, clica para rodar uma query SQL ou abrir um arquivo. O front-end então faz uma requisição fetch (HTTP) para uma rota do FastAPI (/api/...). O FastAPI recebe essa requisição, faz a chamada apropriada para o Databricks (usando o token de autenticação) – seja para executar uma query no warehouse via REST API
-docs.pinkfish.ai
-, ou ler/escrever um arquivo no DBFS – e devolve a resposta processada de volta ao front-end em formato JSON (ou streaming, se for o caso de respostas LLM). Dessa forma, o front-end nunca se comunica diretamente com Databricks; toda interação é mediada e controlada pelo backend (melhorando a segurança e flexibilidade).
-
-Organização de Arquivos (Front-end e Back-end)
-
-Para manter o projeto organizado, podemos estruturar os arquivos em diretórios separados para front e back. Por exemplo:
-
-databricks-dashboard-app/
-├── frontend/
-│   ├── index.html
-│   ├── vite.config.ts
-│   ├── package.json
-│   └── src/
-│       ├── App.tsx, index.tsx (ponto de entrada React)
-│       ├── components/ (componentes React)
-│       ├── services/ (lógica de comunicação c/ backend: ex. chatService.ts, dashboardService.ts adaptados)
-│       └── ... (outros arquivos do front-end)
-├── backend/
-│   ├── main.py (inicialização do FastAPI e montagem de rotas)
-│   ├── requirements.txt (FastAPI, Uvicorn, requests, etc.)
-│   ├── app/
-│   │   ├── api/
-│   │   │   ├── routes_sql.py (endpoints para queries SQL)
-│   │   │   ├── routes_files.py (endpoints para arquivos DBFS)
-│   │   │   └── routes_chat.py (endpoints para chat/LLM, se aplicável)
-│   │   ├── core/
-│   │   │   ├── databricks_client.py (funções utilitárias p/ chamar APIs do Databricks)
-│   │   │   └── config.py (configurações, ex: carregar tokens/hosts de env)
-│   │   └── ... (outros módulos do backend)
-│   └── .env (opcional: variáveis de ambiente para dev, **não commitar**)
-├── .env.example (modelo de .env mostrando variáveis necessárias, sem valores)
-├── docker-compose.yml (opcional: para facilitar execução local)
-└── README.md (instruções de execução e deploy)
+Navegador de Arquivos (FileBrowser/FileTree): Componente opcional (mas recomendado) para listar os arquivos disponíveis na pasta designada do DBFS. Pode ser uma árvore de diretórios ou uma lista simples, dependendo da necessidade. Se implementado, ao montar o EditorPage o front-end chamará um endpoint de listagem (e.g. GET /api/listdir?path=<pasta_base>) para obter os nomes dos arquivos e subdiretórios. O componente exibirá essa lista (por exemplo, como uma sidebar lateral) para o usuário escolher o arquivo desejado. Poderá mostrar ícones diferentes para pastas e arquivos, permitir expandir subdiretórios, etc., embora uma única pasta fixa simplifique para uma lista simples de arquivos .sql/.md. Ao clicar em um arquivo, o EditorPage irá carregar seu conteúdo.
 
+Editor de Código (CodeEditor): Componente principal que fornece a área de edição de texto com syntax highlighting. Aqui, utilizaríamos uma biblioteca adequada, como Monaco Editor ou CodeMirror, integradas ao React. Essas bibliotecas oferecem realce de sintaxe para múltiplas linguagens (incluindo SQL e Markdown) e recursos como tema escuro, numeração de linhas, auto-completar básico, etc. O Monaco Editor, por exemplo, suporta mais de 50 linguagens e diversos temas, com facilidade de configuração de propriedades como altura, linguagem, tema e eventos onChange
+blog.logrocket.com
+blog.logrocket.com
+. Já o React CodeMirror também permite múltiplos modos de linguagem e temas, embora exija adicionar módulos de linguagem/tema separadamente
+blog.logrocket.com
+. Dado o público alvo (engenheiros de dados) e a necessidade de editar SQL/Markdown, o Monaco Editor integrado via @monaco-editor/react é uma ótima escolha pela familiaridade (é o editor do VSCode) e recursos prontos (destacando SQL, Markdown, JSON, etc). Alternativamente, poderíamos usar CodeMirror (@uiw/react-codemirror) caso se deseje um bundle menor, mas com um pouco mais de configuração. Em ambos os casos, configuraremos o editor para:
 
-Detalhes dessa organização:
+Linguagem Dinâmica: escolher automaticamente a linguagem conforme a extensão do arquivo selecionado (ex.: .sql -> linguagem SQL, .md -> Markdown).
 
-O front-end permanece majoritariamente igual, com todos os componentes React e lógica de UI. A diferença será que serviços como dashboardService.ts e chatService.ts serão ajustados para chamar o backend em vez de acessar diretamente a API do Databricks. Por exemplo, getDataForSource que antes talvez retornava dados mock ou chamava diretamente um endpoint externo, agora fará um fetch para o FastAPI (ex: fetch('/api/query?source=...')). Manteremos as pastas de componentes, hooks, etc., conforme o código atual, mas removeremos quaisquer referências diretas a tokens ou endpoints do Databricks.
+Tema: preferencialmente um tema escuro compatível com o restante do app (por exemplo, Monaco com "vs-dark" ou CodeMirror com tema estilo VSCode
+blog.logrocket.com
+blog.logrocket.com
+).
 
-O back-end FastAPI terá suas rotas agrupadas (como exemplificado em routes_sql.py, routes_files.py, etc.), ou pode ser implementado tudo em um único main.py simples se preferir. Na inicialização (main.py), montaremos o app React estático: após rodar o build do Vite, os arquivos ficam em frontend/dist (por exemplo), então podemos usar FastAPI() + Starlette StaticFiles para servir frontend/dist na raiz /. Exemplo:
+Recursos de Edição: ativar numeração de linhas, indentação por tab, highlight de sintaxe, colchetes correspondentes, etc., já disponíveis por padrão nessas libs. Não é necessário implementar funcionalidades avançadas como execução de código no editor – o foco é edição de texto puro.
 
-app = FastAPI()
-app.mount("/", StaticFiles(directory="../frontend/dist", html=True), name="frontend")
+Barra de Ações do Editor: Podemos incluir um pequeno header ou footer dentro do EditorPage com ações como "Salvar". Por exemplo, um botão Salvar (💾) que o usuário pode clicar para salvar manualmente as alterações. Também pode mostrar o nome do arquivo aberto e um indicador de status (ex.: "Salvo", "Alterações não salvas..."). Esse componente pode ser simplesmente parte do JSX do EditorPage (não precisa ser separado a menos que queira reutilizar). Se necessário, incluir também um botão "Novo Arquivo" para criar um arquivo em branco (ver detalhes mais adiante).
 
+Serviço de Editor (EditorService): Assim como existem chatService.ts e dashboardService.ts para comunicação com backend, podemos criar um módulo de serviço (por ex. src/services/fileService.ts ou incorporar no existente dashboardService.ts se apropriado) com funções para chamar as APIs de arquivos. Exemplos: getFileContent(path) faz fetch em GET /api/files?path=... e retorna o conteúdo; saveFileContent(path, content) faz fetch POST para /api/files enviando JSON. Encapsular essas chamadas facilita reutilizar e manejar erros/promise de forma centralizada.
 
-Assim, requisições normais servem o index.html e assets, enquanto requisições que começam com /api/ caem nas rotas do FastAPI.
+Com esses componentes, a hierarquia da página Editor seria algo como: MainLayout (contém menu de navegação) -> EditorPage (contém FileBrowser + CodeEditor + Barra de Ações). O estado da seleção de arquivo atual e conteúdo pode residir em EditorPage (via useState hooks). Por exemplo, EditorPage mantém currentFilePath e fileContent. Quando currentFilePath muda (usuário selecionou novo arquivo), o efeito useEffect chama o serviço para carregar conteúdo. O conteúdo carregado é então passado como value para o CodeEditor. Conforme o usuário edita, podemos atualizar fileContent estado local e acionar auto-save via outro hook.
 
-Arquivos de configuração: o backend terá um módulo (ex: config.py) para carregar configurações (host do Databricks, token, etc.) via os.getenv ou usando libs como python-dotenv ou Pydantic Settings. Isso facilita ler do .env em dev ou das variáveis de ambiente injetadas no deploy (discutido adiante).
+Fluxo de Interação do Editor (Frontend <-> Backend)
 
-Incluímos opcionalmente um Docker Compose para desenvolvimento (discutido mais abaixo), e no README podemos documentar como rodar e como configurar credenciais.
+A interação entre o front-end React e o back-end FastAPI para o Editor seguirá um fluxo bem definido, utilizando endpoints REST já planejados para acesso ao DBFS. Abaixo descrevemos um fluxo típico de uso do Editor e como os componentes e APIs interagem:
 
-Essa separação torna o desenvolvimento organizado (front e back desacoplados internamente) e, ao mesmo tempo, permite build e deploy unificados. No deploy final como Databricks App, pode-se criar um contêiner Docker que instale as dependências do backend, copie o build estático do front para dentro e rode o Uvicorn (FastAPI) servindo tudo.
+Abertura do Editor: Quando o usuário navega para a seção Editor (clicando no menu "Editor"), o componente EditorPage é montado. Neste momento:
 
-Endpoints FastAPI – Consultas SQL no Warehouse Databricks
-
-Para consultar SQL Warehouses no Databricks via API, utilizaremos o Databricks SQL Statement Execution API 2.0
-docs.pinkfish.ai
-. Esse endpoint REST nos permite enviar um comando SQL e obter resultados, dado o warehouse_id (ID do Warehouse SQL onde a query será executada). Em alto nível, o FastAPI receberá do front a string da query (e possivelmente o ID do warehouse ou nome do data source) e então fará uma requisição HTTP POST para o endpoint do Databricks.
-
-Requisitos: precisamos do host do workspace Databricks (por ex: https://<workspace-url>) e um token de acesso válido, configurados no backend. Também precisaremos do Warehouse ID. Podemos gerenciar isso assim:
-
-O Warehouse ID pode ser enviado pelo front-end em cada chamada (por ex, parte do body JSON) ou configurado por padrão no backend (ex: uma variável de ambiente DATABRICKS_WAREHOUSE_ID default). Na prática, é recomendável permitir que o front especifique qual warehouse usar (caso haja múltiplos), mas ter um padrão caso não venha nada.
-
-O host e token ficam seguros no servidor (ver seção de Credenciais).
-
-Exemplo de endpoint FastAPI para executar uma query SQL:
-
-import os, requests
-from fastapi import APIRouter, HTTPException
-
-router = APIRouter()
-
-DATABRICKS_HOST = os.getenv("DATABRICKS_HOST")  # ex: "https://<workspace>.cloud.databricks.com"
-DATABRICKS_TOKEN = os.getenv("DATABRICKS_TOKEN")
-
-@router.post("/api/query")
-def run_sql_query(query: str, warehouse_id: str = None):
-    """Executa uma consulta SQL em um Warehouse do Databricks e retorna os resultados."""
-    # Determina o warehouse ID a usar
-    wh_id = warehouse_id or os.getenv("DATABRICKS_WAREHOUSE_ID")
-    if not wh_id:
-        raise HTTPException(status_code=400, detail="Warehouse ID não fornecido")
-    # Monta a URL do endpoint de execução de statement
-    url = f"{DATABRICKS_HOST}/api/2.0/sql/statements/"
-    payload = {
-        "warehouse_id": wh_id,
-        "statement": query,
-        "wait_timeout": 30  # tempo máx (segundos) para aguardar resultado síncrono (até 50s):contentReference[oaicite:4]{index=4}
-    }
-    headers = {"Authorization": f"Bearer {DATABRICKS_TOKEN}"}
-    try:
-        resp = requests.post(url, json=payload, headers=headers)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erro ao conectar no Databricks: {e}")
-    if resp.status_code != 200:
-        # Propaga o erro como 400/500 conforme o caso
-        raise HTTPException(status_code=resp.status_code, detail=f"Databricks SQL API erro: {resp.text}")
-    data = resp.json()
-    # Verifica se a consulta foi executada dentro do timeout (síncrona) ou se está async
-    if "result" in data:
-        # Resultado disponível imediatamente (consulta curta)
-        return {"result": data["result"]}
-    else:
-        # Consulta demorou mais que timeout e virou async; teremos um statement_id para verificar status
-        statement_id = data.get("statement_id")
-        status = data.get("status", {}).get("state")
-        # Podemos implementar polling para aguardar conclusão
-        # (Aqui, por simplicidade, retornamos o ID e status inicial; o front pode chamar outra rota /status ou repetir a chamada até completar)
-        return {"statement_id": statement_id, "status": status}
-
-
-Funcionamento: Este endpoint POST /api/query espera um corpo (JSON) contendo pelo menos o campo query (string SQL). Opcionalmente, pode aceitar warehouse_id (poderíamos também pegar via query param ou route param). Ele então monta a chamada para POST /api/2.0/sql/statements no workspace Databricks, passando o warehouse_id necessário e a query. Usamos um wait_timeout de 30s para que o Databricks tente retornar o resultado de forma síncrona
-docs.pinkfish.ai
- (o Databricks permite até 50s; se deixarmos 0s ele sempre fará async). Caso a consulta termine dentro desse tempo e os resultados sejam pequenos, a resposta já incluirá result com o result-set. Caso contrário, receberemos apenas um statement_id e um status indicando que está em execução ou pendente.
-
-No exemplo acima, para simplificar, se a chamada for async nós retornamos imediatamente o ID e status; uma implementação mais robusta pode fazer polling: e.g., a cada 5s chamar GET /api/2.0/sql/statements/{statement_id} até o estado ser SUCCEEDED ou FAILED
-medium.com
-. Também é possível retornar imediatamente e o front-end chamar outro endpoint para pegar o status/result, ou usar WebSockets/Server-Sent Events para enviar atualizações ao front conforme a query executa. Como primeiro passo, o design síncrono com timeout atende muitas situações comuns.
-
-Quando a consulta é bem-sucedida e rápida, data["result"] incluirá provavelmente campos como data_array (linhas), columns etc., ou até um link externo para baixar os resultados se forem grandes
-medium.com
-. Podemos simplificar retornando isso diretamente ao front-end. Este então pode exibir numa tabela ou abrir o spreadsheet com os dados.
-
-Observação: Um warehouse_id válido deve ser usado; esse ID pode ser obtido na página do Databricks SQL Warehouse (chamado HTTP Path nas configurações)
-docs.databricks.com
-docs.pinkfish.ai
-. O token de autenticação também deve ter permissão de uso no warehouse.
-
-Endpoints FastAPI – Leitura e Escrita de Arquivos no DBFS
+(Opcional) O EditorPage chama o endpoint GET /api/listdir?path=<base_dir> para obter a listagem de arquivos disponíveis no diretório base configurado no DBFS. O backend responde com JSON contendo os nomes de arquivos e subdiretórios. O front-end então popula o componente FileBrowser (exibindo, por exemplo, uma lista de arquivos .sql e .md encontrados).
 
-Para manipular arquivos no Databricks File System (DBFS) via API, utilizaremos as rotas da DBFS REST API. Em particular, usaremos:
+Em alternativa, se não implementarmos o listdir de imediato, poderíamos ter uma constante ou config com alguns arquivos conhecidos ou exigir input manual do path. No entanto, para melhor UX, a listagem automática é preferível.
 
-GET /api/2.0/dbfs/read – para ler o conteúdo de um arquivo no DBFS.
+Seleção de Arquivo: O usuário seleciona um arquivo existente (clicando no nome na árvore/lista de arquivos). Imediatamente:
 
-POST /api/2.0/dbfs/put – para escrever (ou sobrescrever) um arquivo no DBFS com conteúdo fornecido.
+O front-end chama GET /api/files?path=<caminho_completo_do_arquivo> para ler o conteúdo do arquivo do DBFS. Aqui <caminho_completo_do_arquivo> seria construído combinando o diretório base configurado e o nome do arquivo (ex: base dbfs:/FileStore/appdata/meuapp/ + queries/projetoX.sql). O backend FastAPI, por sua vez, usa a API dbfs/read do Databricks para ler o arquivo e devolver o conteúdo codificado em Base64, que é então decodificado para texto puro antes de retornar ao front-end. Se o arquivo não existir ou der erro, o backend retornará erro HTTP apropriado (404, 403, etc).
 
-A leitura de arquivo via API retorna os dados em formato Base64 dentro de um JSON
-stackoverflow.com
-, portanto nosso backend precisará decodificá-los antes de enviá-los ao front (especialmente se o arquivo for texto). A escrita exige enviar o conteúdo também em Base64. Importante: a API dbfs/put suporta conteúdo inline de até 1 MB
-docs.databricks.com
-; para arquivos maiores, seria necessário usar o fluxo multi-partes (create + add-block + close), mas para simplicidade assumiremos arquivos de texto pequenos ou moderados (ex.: configurações, scripts SQL, etc., geralmente <1MB).
+Ao receber a resposta, o EditorPage atualiza o estado fileContent com o texto do arquivo. O componente CodeEditor exibe esse conteúdo com destaque de sintaxe (por ex., se a extensão é .sql, setamos language="sql" no Monaco; se .md, language="markdown").
 
-Exemplo de endpoints para arquivos:
+O nome do arquivo atual também é armazenado (currentFilePath) para uso em salvamento.
 
-from base64 import b64decode, b64encode
-from fastapi import UploadFile, File
+Edição do Conteúdo: O usuário faz alterações no texto dentro do CodeEditor. O componente de edição deve expor um evento onChange (Monaco e CodeMirror permitem isso) que podemos usar para capturar o texto modificado:
 
-@router.get("/api/files")
-def read_file(path: str):
-    """Lê um arquivo do DBFS e retorna seu conteúdo (texto)."""
-    url = f"{DATABRICKS_HOST}/api/2.0/dbfs/read"
-    headers = {"Authorization": f"Bearer {DATABRICKS_TOKEN}"}
-    resp = requests.get(url, headers=headers, json={"path": path})
-    if resp.status_code != 200:
-        raise HTTPException(status_code=resp.status_code, detail=resp.text)
-    data = resp.json()
-    base64_content = data.get("data", "")
-    # Decodifica de Base64 para bytes, depois para string (assumindo arquivo texto UTF-8)
-    try:
-        content_bytes = b64decode(base64_content)
-        content_str = content_bytes.decode('utf-8')
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Falha ao decodificar arquivo: {e}")
-    return {"path": path, "content": content_str}
+A cada mudança, atualizamos o estado fileContent (isso já pode ser automático se o CodeEditor for controlado via value e onChange).
 
-@router.post("/api/files")
-def write_file(path: str, content: str):
-    """Escreve (ou sobrescreve) um arquivo no DBFS com o conteúdo fornecido."""
-    url = f"{DATABRICKS_HOST}/api/2.0/dbfs/put"
-    headers = {"Authorization": f"Bearer {DATABRICKS_TOKEN}"}
-    # Codifica o conteúdo em Base64 (esperado pela API)
-    content_b64 = b64encode(content.encode('utf-8')).decode('utf-8')
-    payload = {"path": path, "overwrite": True, "contents": content_b64}
-    resp = requests.post(url, headers=headers, json=payload)
-    if resp.status_code != 200:
-        raise HTTPException(status_code=resp.status_code, detail=resp.text)
-    return {"path": path, "message": "Arquivo salvo com sucesso."}
+Implementamos um mecanismo de Auto-Save com debounce: em vez de enviar a cada pressionar de tecla, configuramos um temporizador. Por exemplo, usando setTimeout ou lodash.debounce para chamar a função de salvar 2 segundos após a última edição. Enquanto o usuário continua digitando, o timer reseta. Quando há 2s de inatividade após uma edição, acionamos a gravação automática.
 
+Paralelamente, oferecemos o botão "Salvar" manual. Se clicado, este cancela qualquer timer pendente e força o salvamento imediato.
 
-Explicação:
+Salvamento do Arquivo: Seja pelo auto-save ou pelo clique no botão Salvar, a ação de salvar envolve:
 
-O endpoint GET /api/files?path=/mnt/alguma_coisa/arquivo.txt chama o dbfs/read passando o caminho completo no DBFS. Se o arquivo existe e é legível, o Databricks retorna um JSON com bytes_read e data (a string Base64 do conteúdo)
-stackoverflow.com
-. Decodificamos e retornamos o texto puro. Observação: Se for necessário suportar arquivos binários (ex.: imagens), poderíamos retornar os bytes ou talvez usar Streaming, mas como o uso aqui é para um editor de texto, assumir conteúdo textual é adequado.
+Chamar POST /api/files enviando no corpo um JSON com o caminho do arquivo e o conteúdo de texto atual (por exemplo { "path": "<caminho_completo_do_arquivo>", "content": "<texto_atualizado>" }). O backend então utiliza a API dbfs/put do Databricks para gravar o conteúdo. Conforme implementado, nosso endpoint definirá overwrite=true para atualizar ou criar o arquivo. O conteúdo é convertido para Base64 e enviado à API do Databricks (observando o limite de ~1 MB por chamada). Em caso de sucesso, retorna uma resposta 200 com uma mensagem de confirmação (por exemplo "Arquivo salvo com sucesso.").
 
-O endpoint POST /api/files espera um JSON no corpo contendo path (caminho de destino no DBFS) e content (texto a escrever). Internamente converte o texto para Base64 e usa dbfs/put com overwrite=true. Conforme a documentação, podemos enviar o conteúdo inteiro em base64 contanto que seja < 1 MB
-docs.databricks.com
-. Em caso de sucesso (código 200), retornamos uma mensagem de OK.
+O front-end, ao receber sucesso, pode indicar visualmente que as alterações foram salvas – por exemplo, exibindo um pequeno indicador "✅ Salvo" próximo ao nome do arquivo ou uma notificação toast. Também podemos resetar um flag de “dirty” (modificado) do editor até que haja novas edições.
 
-Nota: Em vez de passar content como string pura JSON (que pode ter problemas com quebras de linha), outra estratégia seria usar UploadFile do FastAPI para receber um arquivo, mas como estamos lidando com texto simples, o JSON direto funciona.
+Se ocorrer erro no salvamento (ex: falta de permissão, espaço insuficiente ou falha de rede), o front exibirá uma mensagem de erro ao usuário (talvez via modal ou toast vermelho) e manterá o conteúdo na memória para não perdê-lo. O usuário poderia tentar salvar novamente.
 
-Também poderíamos suportar overwrite=false se quisermos prevenir sobrescrita acidental, mas aqui optamos por sempre sobrescrever.
+Criação de Novo Arquivo: Se desejado, o Editor pode suportar criação de arquivos .sql/.md novos:
 
-Além disso, poderíamos implementar um endpoint de listagem de arquivos (ex: GET /api/listdir?path=/mnt/dir) usando GET /api/2.0/dbfs/list para permitir ao editor navegar em diretórios. Isso seria útil caso a pasta específica tenha vários arquivos e o usuário escolha qual editar. Por simplicidade, mencionamos que é possível implementar (a resposta foca em leitura/escrita conforme pedido).
+Adicionar um botão "Novo Arquivo" na interface do Editor. Ao clicar, pode-se abrir um prompt para o usuário digitar o nome do novo arquivo (ex: "novo_script.sql" ou "README.md"). Podemos restringir para forçar incluir extensão válida (.sql ou .md) automaticamente se o usuário não colocar.
 
-No front-end, imaginamos que exista um componente de editor de texto que, ao ser aberto, chama o GET /api/files para carregar o conteúdo atual de um arquivo no DBFS, e ao salvar envia o conteúdo editado via POST /api/files. Com esses endpoints, atingimos o item 3 (Leitura/escrita em pasta específica do DBFS).
+Uma vez definido o nome, o EditorPage limpa o conteúdo atual (editor em branco) e define currentFilePath para o novo caminho. O usuário edita o conteúdo e, ao salvar, a chamada POST /api/files com esse caminho resultará em criar o arquivo no DBFS (já que overwrite=True também cobre o caso de arquivo inexistente, criando-o).
 
-Estratégia Segura de Configuração de Credenciais
+É importante talvez sinalizar se um arquivo já existe para evitar sobreescrita acidental: poderíamos fazer o backend verificar existência se overwrite for um problema, mas conforme escolha de design, estamos permitindo sobrescrever sempre por simplicidade. Em UX, se quisermos mais segurança, ao tentar salvar um arquivo novo cujo nome já exista no diretório, podemos alertar "Arquivo já existe, deseja substituir?" antes de prosseguir.
 
-Manter as credenciais (como o token de acesso do Databricks) seguras é fundamental. Na arquitetura atual, o token nunca deve estar no código ou bundle do front-end – isso foi identificado como uma vulnerabilidade na versão atual do projeto. Em vez disso, usaremos variáveis de ambiente, arquivos de configuração fora do front, e os recursos de secrets do próprio Databricks para fornecer essas credenciais ao backend de forma segura:
+Fechamento ou Mudança de Arquivo: Se o usuário sai do Editor ou seleciona outro arquivo enquanto há mudanças não salvas, devemos cuidar para não perder dados:
 
-1. Variáveis de ambiente e arquivos .env (local/dev): Em desenvolvimento local, podemos usar um arquivo .env no diretório backend/ contendo chaves como DATABRICKS_TOKEN, DATABRICKS_HOST (URL do workspace) e possivelmente DATABRICKS_WAREHOUSE_ID. O backend pode carregar automaticamente esse .env (usando python-dotenv no startup) para popular os.environ. Assim, desenvolvedores não colocam tokens diretamente no código, apenas nesse arquivo local (que nunca deve ser commitado ao repositório). Um .env.example sem valores reais pode documentar quais variáveis são necessárias.
+Graças ao auto-save, idealmente todas mudanças já terão sido gravadas após 2s de o usuário parar de digitar. Ainda assim, por segurança, podemos implementar um aviso "Você tem alterações não salvas, tem certeza que deseja trocar de arquivo ou sair?" se detectarmos conteúdo divergente que não foi salvo. Esse comparativo pode ser feito mantendo uma cópia do último conteúdo salvo e comparando com o estado atual.
 
-2. Databricks Secret Scope (produção): Quando for implantar como um Databricks App, devemos utilizar o gerenciador de segredos do Databricks em vez de passar valores sensíveis diretamente. O Databricks Apps permite adicionar Secret Resources ao app: essencialmente, nós armazenamos o token de acesso (e outros segredos) em um Secret Scope no workspace, e então configuramos o app para ter acesso de leitura a esse scope
-docs.databricks.com
-. Ao fazer o deploy, o Databricks irá injetar esses segredos como variáveis de ambiente no container do app
-docs.databricks.com
- – dessa forma, o token chega ao nosso FastAPI sem nunca ficar exposto em código ou na interface do Databricks
-docs.databricks.com
-. Por exemplo, podemos configurar um secret scope "myapp-secrets" com a key dbr_token, e no app config mapeá-lo para a env DATABRICKS_TOKEN. O mesmo vale para outras credenciais (se precisássemos, por ex., uma chave da OpenAI API, etc.).
+Outra abordagem é simplesmente salvar imediatamente ao trocar de arquivo (trigger auto-save imediata) e prosseguir.
 
-(Citação do Databricks Apps docs: "Apps retrieve these secrets at runtime, which keeps them out of your application code and environment definitions."
-docs.databricks.com
-)
+Este fluxo garante que atendamos aos requisitos de leitura/escrita de arquivos no DBFS (Requisito 1 e 3) de forma intuitiva. Resumidamente, o componente de editor de texto abre um arquivo via GET e salva via POST nos endpoints do FastAPI, conforme descrito, mantendo toda a lógica de DBFS no servidor e a UI responsiva para o usuário.
 
-3. Entrada de credenciais via UI (opcional): Dependendo do caso de uso, poderíamos permitir que o usuário entre com seu próprio token (por exemplo, se o app precisar conectar em diferentes workspaces/databases dinamicamente). Nesse cenário, poderíamos ter uma tela de configuração solicitando o token e a URL do workspace. O backend poderia receber esses dados e armazenar em memória apenas para aquela sessão de usuário (ou em um cookie de sessão). Mas isso apresenta desafios de segurança – ter o usuário fornecendo token via UI exige proteger muito bem a sessão e tráfego (TLS obrigatório) e jamais persistir esse token no front. Dado que o escopo aqui parece um app interno a ser deployado já com um workspace definido, provavelmente utilizaremos o token da empresa fixo via secrets, então não implementaremos input de token pelo usuário final.
+Backend FastAPI – Endpoints de Leitura/Escrita no DBFS
 
-Resumindo, a estratégia é: utilizar variáveis de ambiente e serviços de segredo para configurar credenciais, nunca codificá-las no front-end ou em repositórios públicos. Em código, acessamos as credenciais via os.getenv('DATABRICKS_TOKEN') e semelhantes. Caso alguma credencial não esteja configurada, o backend pode recusar inicializar ou pelo menos retornar erros claros pedindo configuração.
+No backend, expandiremos (ou utilizaremos) os endpoints FastAPI para manipulação de arquivos no DBFS. Segundo o contexto, já havia uma intenção de implementar routes_files.py com essas rotas. Os principais endpoints/configurações serão:
 
-Estratégia para Proteger o Backend
+GET /api/files: Lê o conteúdo de um arquivo no DBFS. Recebe o caminho do arquivo via query parameter (por exemplo, GET /api/files?path=dbfs:/FileStore/appdata/meuapp/arquivo.sql). Internamente, faz uma requisição HTTP para GET /api/2.0/dbfs/read na API do Databricks, passando o caminho fornecido. A resposta do Databricks vem em JSON contendo os bytes lidos e o conteúdo codificado em Base64. O FastAPI então decodifica esse Base64 para obter o texto original (assumindo UTF-8 para arquivos .sql/.md) e devolve um JSON como {"path": "<path>", "content": "<texto_do_arquivo>"}. Em caso de erro (arquivo não encontrado, acesso negado, etc.), retorna o status HTTP e mensagem de erro apropriadamente (utilizando HTTPException).
 
-Com o backend centralizando as operações sensíveis, precisamos protegê-lo contra acessos indevidos e uso malicioso. Vários níveis de proteção devem ser considerados:
+POST /api/files: Escreve conteúdo em um arquivo no DBFS. Espera-se um corpo JSON com {"path": "<caminho>", "content": "<novo_conteúdo_texto>"}. O handler converte o conteúdo de texto para Base64 (porque a API do Databricks espera o campo contents em Base64) e então faz uma requisição POST /api/2.0/dbfs/put para o Databricks, incluindo overwrite=true no payload para permitir criar/sobrescrever o arquivo. Supondo sucesso (status 200), retorna ao front um JSON confirmando, por ex: {"message": "Arquivo salvo com sucesso", "path": "<path>"}. Erros da API do Databricks (ex: payload grande demais, token inválido) resultam em HTTPException com código apropriado para que o front possa exibir erro.
 
-CORS e Origem Segura: Configure o FastAPI para aceitar requisições somente do domínio/origem do front-end. Em dev, isso pode ser http://localhost:5173, e em produção, se front e back estão no mesmo host, não há problema de CORS (pois servimos o front pelo backend). De todo modo, adicionar o middleware de CORS do FastAPI restringindo a origin correta e habilitando credenciais se necessário é boa prática. Isso impede que terceiros (outros sites) façam chamadas ao nosso backend com um usuário logado, por exemplo.
+(Opcional) GET /api/listdir: Endpoint adicional para listar arquivos em um diretório. Por exemplo GET /api/listdir?path=dbfs:/FileStore/appdata/meuapp/. Se implementado, internamente chamará GET /api/2.0/dbfs/list do Databricks, que retorna nomes de arquivos e diretórios dentro do caminho especificado. O FastAPI então formata isso como uma lista de itens (por exemplo {"files": [{"name": "foo.sql", "type": "file"}, {"name": "docs", "type": "directory"}, ...]}). Esse endpoint facilita popular a árvore de arquivos no front-end e navegar em subpastas. Caso o diretório seja muito grande ou o path inválido, retornará erro ou lista parcial conforme necessidade.
 
-Autenticação de Usuário: Se o app for usado internamente por várias pessoas, considere implementar autenticação no backend. Pode ser simples (um login com senha) ou integrado com o Auth do Databricks (se há algum SSO). Isso garantiria que apenas usuários autorizados acessem as funções (especialmente porque algumas permitem modificação de arquivos ou execução de queries arbitrárias). Em alguns cenários internos, pode-se optar por proteger o app atrás do login do workspace (ex.: só acessível para funcionários via rede interna ou SSO do Databricks), mas caso contrário, implemente pelo menos um controle de acesso. Uma abordagem leve: exigir um token de API próprio do app em cada requisição (por ex, configurar uma chave secreta para o app e o front enviá-la via header nas requisições; o backend valida antes de prosseguir). Isso não substitui autenticação de usuário, mas adiciona uma camada (segredo compartilhado) que dificulta acesso não autorizado.
+Todos esses endpoints aproveitam as credenciais (host do workspace e token de acesso) configurados no backend para chamar a API do Databricks. Importante: O token nunca é exposto ao cliente – o FastAPI age como intermediário seguro. Certifique-se de carregar essas credenciais de modo seguro (variáveis de ambiente ou Databricks Secrets) e não colocá-las em código-fonte ou front-end, conforme já planejado no projeto.
 
-Validação e Sanitização de Inputs: O backend deve validar os parâmetros recebidos. Por exemplo, no endpoint de query SQL, poderíamos limitar o que pode ser executado. Se o caso de uso é apenas leitura/analítica, podemos rejeitar comandos perigosos (DROP/DELETE) verificando a string da query por um whitelist ou blacklist. Alternativamente, se for permitido comandos de modificação, pelo menos registrar ou pedir confirmação. No caso de prompts do LLM gerando SQL, há risco de SQL injection via prompt; devemos manter as queries dentro do contexto esperado. O código existente já sugere um analisador de risco (analyzeRisk) para queries geradas – isso pode ser aplicado no backend antes de executar qualquer SQL sugerido pelo modelo, marcando consultas potencialmente destrutivas e talvez exigindo autorização do usuário antes de executar.
+Também precisamos estar atentos ao tamanho dos arquivos: a API dbfs/put tem um limite de ~1 MB para conteúdo inline. Como se trata de arquivos de texto (scripts SQL ou Markdown de configuração/documentação), geralmente isso é suficiente. Se futuramente for necessário suportar arquivos maiores, teríamos que implementar o fluxo multipart (DBFS create/add-block/close), mas isso adicionaria bastante complexidade – portanto, neste plano assumimos arquivos pequenos/médios (< 1 MB) para manter a implementação simples.
 
-Rate Limiting e Size Limiting: Para evitar abuso, podemos implementar limite de requisições por minuto por IP ou por usuário (existem libs como SlowAPI para FastAPI). Assim, um usuário mal-intencionado não consegue fazer spam de queries pesadas. Também podemos limitar tamanhos – por exemplo, se alguém tenta ler um arquivo grande via /api/files, podemos bloquear caso exceda um limite (embora a API do DBFS já tenha limites práticos).
+Os endpoints devem ser adicionados às rotas do FastAPI (provavelmente dentro de routes_files.py). As funções exemplificadas acima mostram a essência do código. Já que se mencionou que parte disso está “iniciado no código”, é verificar e completar quaisquer trechos faltantes. Por exemplo, garantir que DATABRICKS_HOST e DATABRICKS_TOKEN estejam sendo lidos do config (os.getenv ou app.core.config) e que as exceções sejam tratadas. Após implementar, incluir essas rotas no app FastAPI (montá-las sob prefixo /api se não estiverem automaticamente, dependendo da estrutura do projeto).
 
-Uso de Segredos no Servidor: Conforme já descrito, o token do Databricks fica somente no servidor. Nunca enviamos esse token ao front ou a logs. Inclusive, ao configurar o app no Databricks, usar valueFrom para mapear o secret em vez de expor valor em plaintext nas variáveis de ambiente do painel do app
-docs.databricks.com
+Integração com o Componente de Chat (LLM)
+
+Um dos diferenciais será a integração entre o Editor de Texto e o chat com LLM já existente no front-end (componentes em components/chat/*). Essa integração visa permitir que conteúdos gerados ou solicitados via chat possam ser facilmente salvos como arquivos no DBFS, atendendo ao requisito (4). Abaixo estão propostas de como integrar os dois módulos:
+
+Botão "Salvar como arquivo" em respostas do LLM: Quando o assistente de IA (LLM) fornecer uma resposta contendo código ou texto que o usuário deseje salvar, a interface deve oferecer um atalho. Por exemplo, se o ChatGPT retornar um bloco de código SQL ou um trecho Markdown, o componente de renderização de markdown (provavelmente MarkdownRenderer ou similar) pode adicionar um pequeno botão de ação próximo ao bloco de código ou no menu da mensagem. Esse botão, talvez representado por um ícone de disquete (💾) ou texto "Salvar no DBFS", ao ser clicado:
+
+Abre um diálogo para o usuário especificar o nome do arquivo e pasta (com um default possivelmente preenchido, e.g. "resposta.sql" ou "nota.md"). Como estamos restringindo a uma pasta base, podemos apenas pedir um nome simples e internamente o salvaremos naquela pasta.
+
+Em seguida, o front-end chama o serviço de arquivos (função de save) passando o conteúdo da resposta do LLM. Esse conteúdo já está disponível no front (o markdown renderer tem a string do código). Assim, podemos reutilizar a chamada POST /api/files para criar o arquivo. O backend salvará o conteúdo no DBFS e retornará sucesso.
+
+Após salvar, podemos notificar o usuário ("Arquivo nome.sql salvo com sucesso!"). Também podemos oferecer a opção de “Abrir no Editor”: ou seja, logo após salvar, o app poderia navegar automaticamente para a seção Editor e carregar o arquivo recém-salvo, caso o usuário queira verificar ou continuar editando. Isso melhora o fluxo contínuo entre obter uma sugestão do LLM e refiná-la manualmente.
+
+Comando de Chat para salvar arquivo: Além do botão na interface, poderíamos dar suporte a comandos de linguagem natural no próprio chat. Exemplo: o usuário escreve para o LLM algo como "Salve esse código no DBFS como analise_projeto.sql". Sem integração, o LLM não teria como realmente efetuar essa ação (ele poderia talvez responder "Arquivo salvo" sem ter feito nada, o que não é ideal). Para tratar isso corretamente, podemos implementar uma interceptação no front-end:
+
+Quando o usuário envia uma mensagem no chat, antes de enviar para o modelo, checar se corresponde a um padrão de salvar arquivo (por exemplo, começa com "salvar" ou "save file"). Caso positivo, o front pode interromper o envio ao LLM e tratar ele mesmo. Podemos parsear a mensagem do usuário para extrair o nome do arquivo desejado (e talvez qual conteúdo salvar, se ele se refere à resposta anterior, etc.). Provavelmente, a intenção será salvar o último resultado gerado pelo LLM. Nesse caso, o front-end pode pegar o conteúdo da última mensagem do assistente, chamar o endpoint de salvar arquivo (como acima) e então inserir uma mensagem no chat do tipo: Assistente: "Arquivo analise_projeto.sql salvo no DBFS." confirmando a ação.
+
+Essa abordagem requer que guardemos a referência ao último output do LLM. O componente de chat pode manter o histórico. O comando pode ser algo estruturado, como !save nome.ext ou apenas linguagem natural que detectamos via regex.
+
+Observação: Também poderíamos implementar essa funcionalidade do lado do backend LLM como uma ferramenta (tool) que o agente pode chamar – ou seja, transformar "save file" em uma função que o agente LLM pode acionar (se estivermos usando LangChain/ReAct with tools ou OpenAI Functions). Porém, isso adiciona complexidade de AI agent. Dado o escopo, uma implementação front-end simplificada (botão ou interceptação de comando) é mais direta e garante controle explícito da ação de salvar.
+
+Uso do Editor via Chat: Outra possibilidade é permitir que o chat abra o editor ou informe o usuário sobre arquivos. Por exemplo, se o usuário perguntar "Abra o arquivo X", o LLM poderia responder instruindo a abrir, e podemos transformar isso numa ação. Contudo, sair do domínio Q&A e executar ações no app deve ser feito cuidadosamente (talvez através de uma lista de opções ou botões gerados). Inicialmente, focaremos apenas no fluxo de salvar conteúdo gerado pelo LLM.
+
+Para implementar o botão "Salvar como arquivo" nas respostas, modificaremos o componente de mensagem ou markdown renderer. Como o código usa a biblioteca marked para renderizar Markdown, podemos pós-processar a renderização dos <pre><code> ou envolver o bloco em um contêiner com botão. Alternativamente, podemos renderizar código com um custom component: por exemplo, se o MarkdownRenderer detectar um bloco de código, em vez de simplesmente gerar <pre>, ele pode gerar um componente <CodeBlock> nosso que inclui o <pre> e um <button> no canto. Esse botão onClick disparará a lógica de salvar (dialog + API call). Essa customização garante que não mexemos com a string Markdown em si, mas com a renderização React, aproveitando a flexibilidade do front-end.
+
+Em resumo, a integração com o chat traz conveniência: o usuário pode ir do LLM -> Arquivo rapidamente. Isso atende cenários como: o engenheiro pede ao LLM "gera uma query que faz X", o LLM responde com o SQL, e o usuário salva direto no repositório (DBFS) para usar no futuro. Ou o usuário escreve documentação no chat e salva como Markdown no projeto. Tudo isso sem copiar/colar manualmente entre ferramentas, aumentando a produtividade.
+
+Considerações de Segurança
+
+Implementar um editor de arquivos acarreta alguns riscos se não forem tomadas precauções. Vamos abordar os principais pontos – restrição de escopo (pasta), validação de tipos de arquivo, e outras validações – para garantir segurança e controle:
+
+Restrição a Pasta Base: Conforme definido, o Editor deve operar apenas em uma pasta específica do DBFS (configurável via variável ou constante). É crucial que o backend restringe o path recebido aos limites dessa pasta. Ou seja, ao receber um path no GET/POST, o FastAPI deve verificar se ele começa com o prefixo configurado (por ex: dbfs:/FileStore/appdata/meuapp/). Se um path for enviado fora dessa raiz (ex: dbfs:/ ou outra área sensível), a requisição deve ser rejeitada (HTTP 403 ou 400). Isso previne que usuários mal-intencionados ou eventuais bugs exponham arquivos fora do escopo pretendido (por exemplo, alguém tentar ler dbfs:/mnt/secure-data/passwords.csv). No front-end, podemos adicionalmente ocultar ou nem oferecer opção de navegar fora da pasta alvo – o FileBrowser começaria já no diretório base fixo.
+
+Validação de Nome/Tipo de Arquivo: No contexto deste editor, apenas arquivos de texto com extensão .sql ou .md são esperados. Portanto, devemos validar os nomes tanto no front quanto no back:
+
+No front-end, ao criar novo arquivo ou salvar existente, garantir que o nome termina em .sql ou .md. Podemos bloquear outros sufixos na UI (ou pelo menos alertar "Tipo de arquivo não suportado").
+
+No backend, uma verificação semelhante: se path não corresponder a um padrão permitido (por exemplo, usar regex para .sql$|.md$ no caminho completo), então retornar erro em vez de tentar acessar. Isso impede gravar arquivos de tipos inesperados (como binários ou scripts potencialmente perigosos).
+
+Essa limitação de tipos também simplifica garantir que o conteúdo é texto simples (evitando necessidade de tratar binário).
+
+Sanitização de Path: Caso o nome do arquivo venha do usuário (ex: via chat ou input), devemos sanitizá-lo para evitar caracteres inválidos ou tentativas de path traversal. Como o DBFS path é do tipo dbfs:/diretorio/arquivo, não há “../” literal para subir nível (a API provavelmente não permite), mas por via das dúvidas podemos bloquear caracteres como / no nome do arquivo (exceto para separador de diretório se permitirmos subpastas via interface). Basicamente, nomes de arquivo devem ser simples, sem sequência suspeitas. Também evitar espaços ou caracteres especiais que possam causar problema com chamadas REST. Uma abordagem é permitir apenas [a-zA-Z0-9._-] nos nomes, ou algo próximo disso, informando ao usuário se o nome for inválido.
+
+Autenticação e Autorização: Assegure-se de que somente usuários autenticados possam usar esses endpoints de arquivo. Pelo código, parece haver um hook de autenticação (useAuth) e possivelmente um login. O FastAPI poderia checar um token de sessão ou similar. Como é um app interno, todos logados teriam acesso semelhante, mas é bom reforçar. Se necessário, implementar no FastAPI Dependences um Depends(current_user) para proteger rotas /api/files e /api/listdir. Além disso, habilitar CORS apenas para o front-end origin e usar HTTPS garantem que chamadas não sejam interceptadas ou feitas por terceiros não autorizados.
+
+Controle de Acesso no DBFS: O token do Databricks usado pelo backend tipicamente tem permissões amplas (talvez de um service principal ou admin). Já restringimos por código a pasta base, mas vale mencionar: se quisermos camada extra, podemos criar no Databricks uma pasta designada e ajustar ACLs de token para acesso somente ali (se o Databricks permitir granularidade assim para tokens). Em muitos casos não é possível restringir tanto, então confiamos no controle do app.
+
+Validação de Conteúdo: Em geral, editar arquivos de texto não apresenta risco direto de comando. Ainda assim, atenção para não executar nada do conteúdo recebido. O backend deve tratar o conteúdo como dado opaco (salvá-lo diretamente). Se futuramente houver alguma funcionalidade de "executar SQL" via arquivos, aí sim precisaria de validação anti SQL injection, etc., mas no caso do Editor isso não se aplica diretamente (essa preocupação já estaria no módulo de queries SQL separado).
+
+Limites de Tamanho e Rate Limit: Como mencionado, podemos impor um limite de tamanho de arquivo aceito (por exemplo, 1 MB, alinhado ao limite da API Databricks). Se alguém tentar salvar algo maior, retornar erro indicando que excede o tamanho. Também evitar salvar conteúdo binário (poderíamos detectar se o texto decodificado não é válido UTF-8, por ex.). Adicionalmente, implementar rate limiting no FastAPI (ex: limite de X saves por minuto por usuário/IP) previne abuso, embora em ambiente controlado de poucos usuários isso seja menos crítico.
+
+Logs e Auditoria: Para contexto empresarial, pode ser útil registrar atividades sensíveis. Por exemplo, logar toda operação de escrita de arquivo com usuário, path e timestamp. Isso não impede nada em tempo real, mas cria trilha de auditoria caso precise ver "quem editou tal arquivo". Esses logs podem ficar no backend (stdout ou um arquivo de log no servidor). Não expor logs no front.
+
+Tomando essas medidas, garantimos que a funcionalidade de edição não abra brechas de segurança significativas. Em essência, confinamos a edição a um âmbito controlado (pasta e tipos específicos), validamos entradas e mantemos as credenciais seguras apenas no servidor. Assim, os engenheiros de dados podem editar seus scripts sem risco de tocar em arquivos indevidos ou expor informações sensíveis.
+
+Melhores Práticas de UX para o Editor de Texto
+
+Para que a experiência do usuário (engenheiro de dados) seja fluida e produtiva, devemos seguir algumas boas práticas de design de interface e usabilidade no Editor:
+
+Familiaridade de IDE: Data engineers frequentemente usam IDEs ou notebooks; o editor deve trazer elementos familiares. Portanto, habilitar numeração de linhas, destaque de sintaxe colorido e usar fonte monoespaçada (geralmente default nesses componentes) é essencial. Também convém mostrar uma linha de cursor com highlight e permitir buscar texto (Ctrl+F) dentro do editor – Monaco, por exemplo, já suporta Ctrl+F nativamente
+blog.logrocket.com
+blog.logrocket.com
 .
 
-Comunicação Segura: Garantir que o serviço esteja acessível via HTTPS (no Databricks Apps isso já é padrão, no local usar https:// se for exposto). Isso é fundamental para proteger tokens em trânsito e quaisquer dados sensíveis.
+Tema Consistente: Se o app possui um tema escuro (como sugerido pelo uso de Tailwind com classes bg-gray-900 etc.), configurar o editor para tema escuro mantém a consistência visual e reduz fadiga visual. Monaco Editor permite definir theme="vs-dark" facilmente
+blog.logrocket.com
+, e CodeMirror tem temas como vscodeDark disponíveis
+blog.logrocket.com
+. Cores de destaque de sintaxe devem contrastar bem com o fundo (Monaco/CodeMirror já cuidam disso nos temas populares).
 
-Proteção das APIs de arquivos: No design atual, api/files permite ler e escrever arquivos arbitrários no DBFS, desde que se saiba o path. Para evitar vazamento ou edição indevida, podemos restringir a pasta específica que o app manipula. Por exemplo, se o requerimento 3 menciona "uma pasta específica do DBFS", podemos fixar um diretório base, como dbfs:/FileStore/appdata/<nome-app>/. Então, o backend pode verificar que o path fornecido sempre comece com esse prefixo, recusando paths fora. Isso evita que alguém tente acessar dbfs:/ root ou outras áreas críticas.
+Indicadores de Status e Feedback: Sempre que uma ação ocorrer em background (carregando ou salvando), informe o usuário:
 
-Logs e Auditoria: Registrar no backend quando queries são executadas ou arquivos alterados, para fins de auditoria, pode ser útil em contexto empresarial. Esses logs não ficariam acessíveis ao front-end comum, mas ajudariam a monitorar uso indevido.
+Ao carregar um arquivo (GET files), pode-se mostrar um spinner ou mensagem "Carregando..." no editor até o conteúdo aparecer, para o usuário saber que está em progresso.
 
-Em resumo, a proteção do backend envolve tanto controles de acesso (quem pode usar as APIs) quanto filtros de conteúdo (o que as APIs podem fazer). Dado que o app é interno, poderemos confiar nos usuários autenticados do workspace, mas aplicar best practices (como não expor endpoints desnecessários e sempre validar inputs) é importante para evitar tanto ataques externos quanto erros acidentais do usuário.
+Durante auto-save, pode mostrar discretamente "Salvando..." no rodapé do editor ou mudar o ícone de salvar para um estado ativo. Quando concluir, mostrar "Salvo" rapidamente. Se usar um ícone, pode trocar para um checkmark momentâneo.
 
-Integração com LLM Agents (Chat do App)
+Em caso de erro no save (ex: falha de rede), exibir imediatamente um alerta ou notificação indicando que não foi possível salvar, mantendo as mudanças no editor (talvez marcar o status como "Erro ao salvar, tente novamente"). Não esconder problemas do usuário.
 
-O aplicativo possui um componente de chat com um Agente LLM (Large Language Model) integrado – isto é evidenciado por arquivos como chatService.ts e promptFactory.ts no front-end. O objetivo agora é expor metadados do workspace Databricks para esse agente e integrar as novas capacidades (consulta SQL, acesso a dados) ao fluxo de conversa.
+Prevenção de Perda de Dados: Implementar confirmação ao fechar/navegar se há alterações não salvas (caso ainda utilizemos um botão salvar manual). Ninguém quer perder trabalho por engano. Um diálogo "Existem alterações não salvas, deseja sair mesmo assim?" pode salvar o dia. No caso do auto-save, essa janela de risco diminui, mas ainda pode haver o instante entre digitar e salvar automático.
 
-1. Exposição de Metadados do Workspace: Podemos implementar um endpoint no backend (por exemplo, GET /api/metadata) que retorna informações como catalogs/esquemas, tabelas e colunas disponíveis. Isso pode ser usado pelo LLM para dar respostas contextuais ou ajudar a formular queries. Duas formas de obter esses metadados:
+Facilidade de Navegação de Arquivos: Se há muitos arquivos, um filtro ou busca na lista de arquivos seria útil. Por exemplo, um campo de busca acima da lista para filtrar por nome. Em árvore de diretório, permitir expandir/colapsar facilmente. Além disso, para distinguir arquivos .sql de .md, podemos usar ícones ou cor diferente, ou categorizar (não obrigatório, mas ajuda visualmente).
 
-Via consultas SQL: usando o mesmo mecanismo de query, podemos consultar as views de sistema/information_schema do Databricks. Por exemplo, executar SHOW SCHEMAS ou consultar information_schema.tables para obter todas as tabelas e colunas. O backend poderia cachear essas informações periodicamente (já que a estrutura de dados muda raramente) e servir via API.
+Operações de Arquivo: Além de abrir e salvar, pense em outras ações comuns:
 
-Via API do Unity Catalog: se o workspace usa Unity Catalog, existe API REST para listar catálogos, esquemas e tabelas. Isso exigiria chamadas adicionais (e possivelmente permissões diferentes). Uma abordagem simples e universal é a via SQL mesmo.
+Renomear ou Deletar arquivo: No escopo atual não foi solicitado, mas poderíamos projetar com extensão futura em mente. Talvez não implementar agora, mas deixar espaço na UI (por ex., clique direito no arquivo poderia listar "Renomear, Excluir"). Se implementado, seriam chamadas adicionais ao DBFS API (delete etc). Mas se não for necessário, podemos simplificar omitindo esses para evitar riscos de deleção acidental.
 
-Por exemplo, poderíamos ter no backend:
+Download do arquivo: Oferecer opção de baixar o arquivo (para edição offline ou versionamento manual) também é uma ideia. Um botão "Baixar .sql" poderia simplesmente pegar o conteúdo atual e criar um blob para download no navegador.
 
-@router.get("/api/metadata")
-def get_metadata():
-    results = {}
-    # obter lista de esquemas
-    schemas = run_sql_query("SHOW SCHEMAS")  # reusar função do query endpoint
-    results["schemas"] = [row["databaseName"] for row in schemas]  # parse conforme estrutura retornada
-    # para cada schema, pegar tabelas:
-    results["tables"] = {}
-    for schema in results["schemas"]:
-        tables = run_sql_query(f"SHOW TABLES IN {schema}")
-        results["tables"][schema] = [t["tableName"] for t in tables]
-    # opcional: colunas de cada tabela (cuidado: pode ser muito dado se muitas tabelas)
-    return results
+Integração com atalhos: Usuários técnicos gostam de atalhos de teclado. Podemos interceptar Ctrl/Cmd+S no editor page para chamar a função de salvar (preventDefault do browser). Monaco Editor às vezes já intercepta, mas podemos customizar. Também Enter numa sugestão do LLM chat para salvar, etc., conforme necessidade.
 
+Preview de Markdown: Como suportamos .md, seria interessante uma visualização Markdown renderizada. Talvez um modo de preview toggle no editor: o usuário edita markdown e clica "Preview" para ver formatado. Isso pode ser implementado simples, reutilizando o MarkdownRenderer do chat para mostrar o conteúdo. Não é prioridade absoluta (já que data engineers podem estar ok vendo raw MD), mas seria um plus de UX. Poderíamos deixar isso como melhoria futura.
 
-Isso produziria um JSON com todos os esquemas e tabelas. Dependendo do tamanho, podemos restringir a um catálogo específico ou permitir query de metadados sob demanda (ex: front pede colunas só quando necessário).
+Responsividade e Layout: Assegurar que o Editor use bem o espaço da tela. Provavelmente o app é desktop-first (por se tratar de código), mas ainda assim:
 
-O importante é que o agente LLM terá acesso a essas informações. Como integrá-las? Há algumas estratégias:
+A lista de arquivos pode ser uma sidebar redimensionável, permitindo o usuário alargá-la se os nomes forem longos.
 
-Contexto no Prompt: Incluir os metadados relevantes diretamente no prompt do LLM. Por exemplo, o promptFactory.ts pode ser modificado para adicionar ao sistema ou ao usuário uma mensagem contendo as tabelas disponíveis. Ex: "O workspace possui as seguintes tabelas: Sales(nome VARCHAR, valor INT), Customers(id INT, nome VARCHAR, ...)". Porém, listar tudo pode ser impraticável se for extenso – então talvez apenas esquemas/tabelas principais ou aquelas utilizadas atualmente no dashboard.
+O editor de código deve expandir para ocupar todo o restante do espaço disponível, com scroll interno se o conteúdo for grande.
 
-Ferramenta/Plugin do agente: Uma abordagem poderosa é tornar o backend de metadados um tool que o agente pode chamar quando precisar. Pelo que vemos no código, há menção a AgentDefinition e possivelmente um registro de ferramentas (há referências a toolRegistry e getAllToolDefinitions). Podemos criar uma ferramenta chamada, por exemplo, "ListTables" ou "GetSchema" que, quando invocada pelo agente, faz uma requisição à API /api/metadata para obter os dados. Se estivermos usando uma arquitetura de agente do tipo ReAct ou através de OpenAI function calling, podemos definir esta função explicitamente.
+Em telas muito pequenas, talvez ocultar a lista de arquivos atrás de um botão (tipo "Mostrar arquivos").
 
-Por exemplo, se migrarmos parte do agente para o backend Python usando OpenAI API, poderíamos definir uma function list_tables(schema: Optional[str]) que internamente chama get_metadata (ou uma variante para um schema específico) e retorna a lista de tabelas/colunas, permitindo que o ChatGPT decida chamá-la. Entretanto, manter no front também é viável: o front-end, ao receber uma resposta parcial do LLM indicando que precisa de metadados, pode chamar o backend e retornar a informação ao modelo (dependendo de como o streaming está implementado).
+Consistência com o resto do app: Usar o mesmo sistema de design (cores Tailwind, etc.). Por exemplo, botões ter o mesmo estilo dos botões em outras páginas. Se há um MainLayout com cabeçalho, manter isso visível para contexto (ex: título "Editor de Arquivos" no topo se adequado).
 
-Como o código atual usa tokens especiais WIDGET_START/END e não sabemos se está usando function calling nativo, podemos integrar de forma customizada: por exemplo, definir que se o usuário perguntar algo como "Quais tabelas tenho disponíveis?", o app intercepta essa pergunta antes (ou o LLM devolve um comando especial) e então o front chama /api/metadata e formata a resposta. Esse seria um fluxo manual. Outra opção: ajustar o system prompt para listar tabelas no início da conversa para que o LLM já saiba.
+Aplicando essas práticas, o Editor se tornará uma ferramenta confortável para o usuário. O auto-save evita perda de trabalho e reduz a ansiedade de lembrar de salvar. A sintaxe colorida e temas adequados aumentam a legibilidade do código e texto. E fluxos integrados (como salvar diretamente do chat e abrir no editor) agilizam tarefas comuns, tornando o aplicativo um ambiente unificado para exploração de dados, desenvolvimento de queries e documentação leve.
 
-2. Integração das Novas Funcionalidades no Chat: Atualmente, chatService.ts provavelmente faz streaming de respostas de um modelo (talvez do Dolly ou ChatGPT) e utiliza promptFactory.ts para montar as mensagens de sistema/usuário. Precisaremos adaptar isso em dois pontos:
-
-Remover chamadas diretas ao Databricks do front: Antes, o front podia estar chamando diretamente o endpoint de modelo do Databricks (como indicado por variáveis DATABRICKS_ENDPOINT_URL e TOKEN no código atual). Agora, a chamada ao modelo será feita pelo backend. Podemos criar uma rota POST /api/chat ou similar, que recebe a mensagem do usuário e as informações de agente, e do lado do backend faz a interação com o LLM. Por simplicidade, se quisermos inicialmente redirecionar a chamada 1-para-1, o chatService front pode simplesmente fazer fetch('/api/chat', { userMessage, agentId }) em vez de fetch(DATABRICKS_ENDPOINT_URL). O backend então pega userMessage, monta o prompt (talvez chamando uma função Python que replica o que promptFactory fazia em TS) e chama a API do modelo (usando requests para OpenAI ou para o endpoint Dolly no Databricks). O backend enviaria de volta a resposta ou faria streaming via SSE/websocket.
-
-Isso mantém o token do modelo seguro (seja OpenAI API key ou Databricks token) no servidor, alinhado à recomendação de BFF.
-
-Ferramentas do agente (execução de queries): O LLM agente agora pode contar com a capacidade de executar SQL e ler arquivos através do backend. Como integrar isso? Uma maneira é seguir o que o projeto parece já implementar com os WIDGET tokens. Por exemplo, na saída de exemplo encontramos:
-
-${WIDGET_START_TOKEN}
-{ "type": "code-executor", "language": "sql", "code": "SELECT * FROM table" }
-${WIDGET_END_TOKEN}
-
-
-Isso sugere que o modelo LLM, ao decidir que quer executar uma query, produz um comando especial (um JSON anotado dentro de tokens delimitadores) que o front-end reconhece. O front provavelmente intercepta esse chunk de resposta e, via getDataForSource ou similar, executa a query e depois exibe o resultado (talvez substituindo o widget pelo resultado ou abrindo planilha).
-
-Com o backend em ação, implementar isso fica mais fácil: quando o front detecta um widget "type": "code-executor", "language": "sql", ele pode imediatamente chamar nosso endpoint /api/query passando o código SQL. Quando o backend retornar os dados, o front-end pode então mostrar o resultado (talvez renderizando um componente de tabela ou gráfico). Esse seria o agente usando a ferramenta de execução de SQL. Tudo ocorre de forma coordenada: o LLM decide e sugere a query, o front-end executa via backend e mostra ao usuário.
-
-De forma semelhante, poderíamos ter um widget ou comando para leitura de arquivo, se fosse necessário: e.g., { "type": "file-reader", "path": "/mnt/..." } e então o front chamaria /api/files para obter o conteúdo e o LLM poderia incorporar a info. Mas esse caso não foi explicitamente mencionado; a prioridade parece ser queries SQL.
-
-Incorporação de Metadados no agente: Suponha que o usuário pergunte algo sobre os dados disponíveis. Poderíamos configurar o agente para responder com base nos metadados. Se optarmos por não listar tudo no prompt (para não poluir), podemos instruir o agente (via system prompt) a responder "Posso buscar essa informação para você." e então produzir um widget de listagem de tabelas, ou simplesmente chamar a ferramenta internamente (se integrarmos function calling). Uma implementação possível é: se o LLM não tem conhecimento das tabelas, mas o usuário pergunta "Quais tabelas existem no schema X?", o agente poderia responder com um formato especial que o front reconhece para acionar a ferramenta de metadados. Por exemplo, retornar ${WIDGET_START}{"type": "metadata", "schema": "X"}${WIDGET_END}; o front então chamaria /api/metadata?schema=X e renderizaria a resposta (ou alimentar de volta ao LLM).
-
-Isso tudo depende de como o AgentDefinition e o promptFactory serão evoluídos. Pelas notas na base de código, parece que o design futuro planeja permitir agentes customizados com suas próprias ferramentas e prompts. Então podemos:
-
-Registrar uma ferramenta de nome "SQLRunner" que aponta para nosso endpoint de query, e talvez uma "SchemaLookup" para o metadata. Associar essas ferramentas a um agente (ex: um agente do tipo "SQL Assistant" teria permissão para usá-las).
-
-No generateSystemPrompt, incluir instruções do tipo: "Você pode usar as seguintes ferramentas: SQLRunner (executa consultas SQL em um banco de dados Databricks) e SchemaLookup (fornece informações de esquema/tabelas). O formato para solicitar uma ferramenta é .... Isso guia o LLM a produzir aqueles JSONs ou outro formato esperado.
-
-Se usarmos OpenAI com function calling no backend, definimos as functions correspondentes e deixamos o modelo decidir chamá-las. Isso simplificaria a lógica no front (toda orquestração ficaria no backend Python), porém seria uma mudança grande em relação ao que o projeto tem hoje (que parece fazer a orquestração no front/JS).
-
-Atualização do Front-end (chatService.ts): No mínimo, o front-end deve ser alterado para não mais contatar o endpoint de modelo diretamente. Ele passa a enviar as mensagens do usuário ao nosso backend. O backend, por sua vez, pode streamar de volta a resposta do modelo (dá para fazer streaming com FastAPI utilizando StreamingResponse e event-stream SSE). O chatService.ts pode usar EventSource ou uma lib como fetch com ReadableStream para repassar essas mensagens progressivamente ao UI.
-
-Em promptFactory.ts, ao invés de montar todo prompt no front, podemos mover a lógica para o backend ou simplificar: enviar para o backend apenas o state atual da conversa e o ID do agente, e lá gerar o prompt final. Alternativamente, continuar gerando no front mas sem dados sensíveis e mandar já as mensagens formatadas para o backend (depende de onde colocamos a inteligência).
-
-Dado que o objetivo principal aqui é conectar com Databricks e não refatorar completamente o agente, um caminho incremental:
-
-Back-end: adiciona um endpoint /api/chat que basicamente faz o papel de proxy seguro: recebe {messages: [...], agentId: ...} e então faz a chamada para o modelo (Databricks serving endpoint ou OpenAI) usando o token seguro. Retorna a resposta stream. Isso retira o token do front imediatamente (resolvendo a falha 8.1 de segurança).
-
-Front-end: altera chatService.streamChatResponse para chamar /api/chat em vez do endpoint direto. Como efeito colateral, a função generateSystemPrompt no front pode não mais precisar incluir as credenciais e URL (que antes talvez eram usadas para decidir se chama OpenAI ou Databricks). Ela pode focar só em conteúdo.
-
-LLM Agent e ferramentas: Podemos manter o mesmo esquema de WIDGET tokens para SQL. A diferença é que agora, quando o front recebe um widget de consulta, chamará o nosso backend para executá-lo. Isso requer adaptar dashboardService.getDataForSource para usar fetch('/api/query'). De fato, podemos adicionar casos: se sourceName === 'databricks' (ou algum identificador) usar a API. Pelo snippet encontrado, atualmente getDataForSource tinha um switch com fruit_sales retornando dados estáticos. Poderíamos expandir:
-
-export const getDataForSource = async (sourceName: string): Promise<any[]> => {
-    if (sourceName === 'databricks') {
-        const res = await fetch('/api/query', {
-            method: 'POST', 
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ query: currentQuery, warehouseId: currentWh })
-        });
-        const data = await res.json();
-        return data.result ? data.result.data_array : []; // adaptando ao formato real
-    }
-    // ... outros cases ...
-}
-
-
-Aqui, currentQuery seria obtido de algum contexto – possivelmente passaremos a query explicitamente para getDataForSource em vez de só nome. Podemos ajustar a interface para getDataForSource(source, query?). No caso de um widget "Generated SQL", o widget JSON em si carrega o SQL no campo code. Então quem chama getDataForSource pode passar esse código.
-
-3. Agente multi-turn com contexto de workspace: Os metadados do workspace darão ao LLM noção do ambiente. Com isso, o agente pode responder perguntas do tipo "Qual é o esquema da tabela X?" com base nos dados fornecidos, ou "Faça uma query que liste os 10 maiores clientes" sabendo que existe uma tabela customers etc. A qualidade dessas respostas dependerá de como alimentamos o LLM com os metadados:
-
-Poderíamos pré-carregar um resumo das tabelas mais relevantes no prompt. Ex.: "Esquema da tabela customers: id (int), name (string), ...; tabela sales: ...".
-
-Ou tornar interativo: se o usuário mencionar uma tabela que o agente não tem contexto, ele pode responder "Vejo que você mencionou a tabela X. Vou consultar seus campos." e então usar a ferramenta para pegar a info e continuar.
-
-De qualquer forma, a arquitetura agora suporta esse fluxo: temos APIs para obter dados e o LLM pode acioná-las via o front-end (ou via backend se implementarmos função). Isso transforma o app de um visualizador passivo de dashboards com chat overlay em um ambiente interativo onde o LLM pode orquestrar ações no Databricks (consultar dados, trazer informações de esquema, etc.) em linguagem natural. Essa é justamente a visão mencionada de evoluir para uma IDE Generativa (GenIDE) no documento do projeto.
-
-Desenvolvimento Local com Hot-Reload (FastAPI + Vite)
-
-Durante o desenvolvimento, queremos rodar o front React e o back FastAPI simultaneamente, com hot-reload em ambos para acelerar o feedback. Há algumas maneiras de configurar isso:
-
-1. Executar front e back em servidores separados com comunicação via proxy/CORS:
-
-Inicie o backend com Uvicorn em modo reload (por exemplo, uvicorn backend.main:app --reload --port 8000). Ele estará ouvindo na porta 8000.
-
-Inicie o frontend com o Vite dev server (geralmente npm run dev ou vite) que por padrão usa a porta 5173. Em desenvolvimento, o front não precisa ser servido pelo FastAPI; podemos deixá-lo rodando no seu próprio servidor de desenvolvimento.
-
-Para facilitar as requisições do front para o back, configure o proxy do Vite ou CORS:
-
-Proxy: No vite.config.ts, adicione:
-
-export default defineConfig({
-  server: {
-    proxy: {
-      '/api': 'http://localhost:8000'
-    }
-  },
-  // ...restante config
-});
-
-
-Isso faz com que qualquer chamada do front para /api/... seja redirecionada para o servidor FastAPI local. Assim, se no código React fizermos fetch('/api/query', {...}), em dev o Vite intercepta e repassa para http://localhost:8000/api/query. Isso elimina problemas de CORS e mantém os caminhos consistentes entre dev e prod.
-
-CORS: Alternativamente (ou adicionalmente), habilite CORS no FastAPI:
-
-from fastapi.middleware.cors import CORSMiddleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
-    allow_methods=["*"],
-    allow_headers=["*"]
-)
-
-
-Isso permite que o front dev acesse as APIs do back dev diretamente. Com isso, poderíamos chamar fetch('http://localhost:8000/api/query') se quisermos. Porém, usar o proxy do Vite é mais conveniente pois podemos simplesmente usar caminhos relativos (e evita ter que condicionar URLs no código para dev/prod).
-
-Com ambas as servers rodando, qualquer mudança no código do front recompila automaticamente graças ao Vite (HMR), e qualquer mudança no código Python recarrega o Uvicorn (por causa do --reload).
-
-2. Script unificado (opcional): Para conveniência, podemos criar na raiz do projeto um script que inicie ambos. Por exemplo, adicionar no package.json (no root ou no frontend) um comando usando concurrently:
-
-"scripts": {
-  "dev": "concurrently -k \"uvicorn backend.main:app --reload\" \"npm run dev --prefix frontend\""
-}
-
-
-Isso executa os dois processos em paralelo no mesmo terminal. O flag -k faz kill dos dois se um terminar. Assim, npm run dev inicializa tudo. (Necessita adicionar concurrently nas devDependencies). Em alternativa, um simples script shell também funcionaria.
-
-3. Docker Compose (opcional): Poderíamos usar Docker Compose para desenvolvimento, mas geralmente o reload do front dentro de container é mais lento. De todo modo, seria possível:
-
-Um serviço para o backend: baseado em uma imagem Python, monta o volume do código, instala deps e roda uvicorn --reload.
-
-Um serviço para o frontend: baseado em node, monta o código e roda npm run dev.
-
-Configurar para que o container do front exponha a porta 5173 e o back 8000.
-
-O proxy do Vite continuaria funcionando (apontando para http://backend:8000 dentro do container, mas para fora é transparente via Compose networking).
-
-Este setup containerizado é útil se quisermos aproximar do ambiente de produção ou evitar instalar dependências localmente. Contudo, muitos desenvolvedores preferem rodar nativamente local para ter live reload mais ágil.
-
-4. Build e execução de produção local: Também vale testar o modo produção localmente. Você pode gerar o build do front (npm run build), ele vai criar frontend/dist com os arquivos estáticos minificados. Depois, iniciar o FastAPI normalmente mas montando os static files do dist (conforme mencionado na seção de Arquitetura). Assim, acessar http://localhost:8000 servirá o app completo (UI + API) como será em produção. Esse teste é importante para pegar qualquer problema de caminho ou integração que possa não aparecer no modo dev.
-
-Resumindo a execução local:
-
-Variáveis de ambiente: Coloque seu token e host Databricks em backend/.env. Por exemplo:
-
-DATABRICKS_HOST=https://<seu>.cloud.databricks.com
-DATABRICKS_TOKEN=<seu token>
-DATABRICKS_WAREHOUSE_ID=<ID do warehouse SQL>
-
-
-(Esses valores você obtém no Databricks: token em User Settings > Personal Access Tokens; warehouse ID na página do SQL Warehouse).
-
-Instalar dependências: pip install -r backend/requirements.txt e npm install no frontend.
-
-Rodar backend: uvicorn backend.main:app --reload --port 8000.
-
-Rodar frontend: npm run dev (porta 5173 por padrão).
-
-Acessar UI: Abra http://localhost:5173 no navegador. O app deverá carregar e conseguir chamar as APIs (via proxy definido). Você pode testar o chat e as funções – o terminal do uvicorn mostrará logs das chamadas /api feitas.
-
-Feito isso, você tem o ambiente interativo. Edite componentes React: verá HMR atualizando a página. Edite uma rota Python: uvicorn reinicia e você pode testar de novo rapidamente.
-
-Dica: No VSCode ou outro editor, considere configurar um Launch Task que inicia ambos serviços, ou use dois terminais side-by-side. A produtividade aumenta muito com o hot-reload nos dois lados.
-
-Conclusão e Recapitulando
-
-Com este plano, cobrimos todos os pontos solicitados:
-
-Arquitetura: front React + Vite e back FastAPI integrados, deployáveis como único serviço (e apontamos como manter estáticos juntos no FastAPI) – seguindo o padrão BFF para segurança.
-
-Organização de arquivos: sugerimos um esqueleto de projeto separando frontend e backend, facilitando manutenção.
-
-Endpoints FastAPI (SQL e DBFS): fornecemos exemplos de implementação para executar queries no SQL Warehouse
-docs.pinkfish.ai
- e ler/escrever arquivos via DBFS (com uso devido de base64)
-stackoverflow.com
-docs.databricks.com
-.
-
-Credenciais seguras: recomendamos uso de env/.env e Secrets do Databricks Apps, evitando exposição de token no cliente
-docs.databricks.com
-.
-
-Chamada React aos endpoints: discutimos como o front utilizará fetch (ou similar) nos serviços, exemplificando chamadas nas funções getDataForSource e via fetch direto. Essas chamadas substituem as que antes iam direto ao Databricks, agora indo ao nosso backend (/api/...).
-
-Proteção do backend: falamos de CORS, autenticação, validação de inputs, rate limiting e restrição de paths, assegurando que somente usuários autorizados e operações seguras ocorram.
-
-LLM Agent integration: explicamos como expor os metadados do workspace (schemas, tabelas) e permitir que o agente LLM use ferramentas (como executar SQL via widget ou função). Também cobrimos a refatoração necessária em chatService.ts e promptFactory.ts para se alinharem ao novo backend (removendo token do front, usando ferramentas do back, e possivelmente ampliando o prompt com dados de esquema).
-
-Dev local hot-reload: fornecemos passos concretos para rodar front e back em paralelo, incluindo configurações de proxy do Vite e dicas de scripts ou Docker Compose, garantindo uma experiência fluida durante o desenvolvimento.
-
-Esse plano, portanto, deve guiar a implementação das funcionalidades desejadas de forma estruturada e segura, transformando o projeto em uma solução robusta de dashboard + chat inteligente sobre o lakehouse do Databricks. Boa implementação!
+Com este plano, cobrimos a estrutura de front-end (novos componentes e integração na navegação existente), os endpoints e lógica de backend para leitura/escrita no DBFS, a interação direta com o chat/LLM para salvar conteúdo gerado e todos os cuidados de segurança e usabilidade. A implementação seguindo essas diretrizes resultará em uma seção "Editor" robusta e útil para os engenheiros de dados, permitindo edição de scripts SQL e markdown de forma segura, integrada e eficiente no ambiente Databricks. Todas as interações permanecem mediadas pelo backend (padrão BFF), garantindo controle sobre o acesso ao Databricks, enquanto o front-end fornece uma UX rica aproveitando componentes de editor de código modernos. Enfim, o aplicativo ganha uma funcionalidade semelhante a um mini-IDE dentro do dashboard, alinhada às necessidades do usuário final.
