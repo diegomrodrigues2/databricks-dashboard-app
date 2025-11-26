@@ -55,13 +55,104 @@ export const toolRegistry: Record<string, ToolDefinition> = {
       required: ['dataSource', 'query'],
     },
   },
-  listTables: {
-    name: 'listTables',
-    description: 'List all available data sources (tables) that can be queried. Returns metadata about each data source including name and description.',
+  list_catalogs: {
+    name: 'list_catalogs',
+    description: 'List all available catalogs in the Unity Catalog metastore.',
     parameters: {
       type: 'object',
       properties: {},
       required: [],
+    },
+  },
+  list_schemas: {
+    name: 'list_schemas',
+    description: 'List schemas within a specific catalog.',
+    parameters: {
+      type: 'object',
+      properties: {
+        catalog_name: {
+          type: 'string',
+          description: 'Name of the catalog to list schemas from',
+          required: true,
+        },
+      },
+      required: ['catalog_name'],
+    },
+  },
+  list_tables: {
+    name: 'list_tables',
+    description: 'List tables within a specific schema.',
+    parameters: {
+      type: 'object',
+      properties: {
+        catalog_name: {
+          type: 'string',
+          description: 'Name of the catalog',
+          required: true,
+        },
+        schema_name: {
+          type: 'string',
+          description: 'Name of the schema',
+          required: true,
+        },
+      },
+      required: ['catalog_name', 'schema_name'],
+    },
+  },
+  get_table_schema: {
+    name: 'get_table_schema',
+    description: 'Get detailed schema information (columns, types, comments) for a specific table.',
+    parameters: {
+      type: 'object',
+      properties: {
+        full_table_name: {
+          type: 'string',
+          description: 'Full name of the table (catalog.schema.table)',
+          required: true,
+        },
+      },
+      required: ['full_table_name'],
+    },
+  },
+  inspect_table: {
+    name: 'inspect_table',
+    description: 'Get schema and a sample of data (first 5 rows) for a table. Use this to understand data content.',
+    parameters: {
+      type: 'object',
+      properties: {
+        full_table_name: {
+          type: 'string',
+          description: 'Full name of the table (catalog.schema.table)',
+          required: true,
+        },
+      },
+      required: ['full_table_name'],
+    },
+  },
+  ask_user: {
+    name: 'ask_user',
+    description: 'Ask the user for confirmation, selection, or input. REQUIRED for destructive actions (DROP, DELETE).',
+    parameters: {
+      type: 'object',
+      properties: {
+        type: {
+          type: 'string',
+          description: 'Type of inquiry: "confirmation", "selection", "text_input"',
+          enum: ['confirmation', 'selection', 'text_input'],
+          required: true,
+        },
+        question: {
+          type: 'string',
+          description: 'The question to ask the user',
+          required: true,
+        },
+        options: {
+          type: 'array',
+          description: 'Options for selection type',
+          required: false,
+        },
+      },
+      required: ['type', 'question'],
     },
   },
 };

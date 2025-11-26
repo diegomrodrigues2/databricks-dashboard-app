@@ -2,7 +2,8 @@ import React, { createContext, useContext, useReducer, useMemo, useCallback, use
 import type { Message, ToolCall, Session, StructuredInquiry, TreeMessage, AgentDefinition } from '../types';
 import { streamChatResponse } from '../services/chatService';
 import { parseStreamedContent } from '../utils/streamParser';
-import { getDataForSource } from '../services/dashboardService';
+import { getDataForSource, executeRawQuery } from '../services/dashboardService';
+import { fetchCatalogs, fetchSchemas, fetchTables, fetchTableDetails } from '../services/explorerService';
 import { saveSession, getSession, createSession, deleteSession as deleteSessionService, updateSessionTitle, clearAllSessions as clearAllSessionsService } from '../services/sessionService';
 import { agentRegistry, DEFAULT_AGENTS } from '../services/agentRegistry';
 
@@ -263,9 +264,11 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
 
     case 'SUBMIT_DECISION':
         const activeThread = getThreadFromLeaf(state.currentLeafId, state.messageMap);
-        const targetMsg = activeThread.find(m => m.structuredInquiry?.id === action.payload.inquiryId);
+        const targetMsgRef = activeThread.find(m => m.structuredInquiry?.id === action.payload.inquiryId);
         
-        if (!targetMsg) return state;
+        if (!targetMsgRef) return state;
+
+        const targetMsg = state.messageMap[targetMsgRef.id];
 
         return {
             ...state,
@@ -465,17 +468,62 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
           const params = JSON.parse(command.params);
           
           if (command.tool === 'searchData') {
-              const data = await getDataForSource(params.dataSource);
+              let data = await getDataForSource(params.dataSource);
+
+              // If no data found in static sources, and we have a query, try executing it
+              if ((!data || data.length === 0) && params.query) {
+                  try {
+                      console.log(`[searchData] Executing query for ${params.dataSource}: ${params.query}`);
+                      data = await executeRawQuery(params.query, 'sql');
+
+                      // Check if the result indicates an error
+                      if (data.length === 1 && data[0].error) {
+                           return {
+                              status: 'error',
+                              error: data[0].error
+                           };
+                      }
+                  } catch (err) {
+                      console.error("Failed to execute query in searchData", err);
+                      return {
+                          status: 'error',
+                          error: err instanceof Error ? err.message : String(err)
+                      };
+                  }
+              }
+
               return {
                   status: 'success',
-                  data: data,
-                  summary: `Successfully fetched ${data.length} rows from ${params.dataSource}`
+                  data: data || [],
+                  summary: `Successfully fetched ${(data || []).length} rows from ${params.dataSource}`
               };
-          } else if (command.tool === 'listTables') {
+          } else if (command.tool === 'list_catalogs') {
+               const catalogs = await fetchCatalogs();
                return {
                    status: 'success',
-                   data: ['fruit_sales', 'mango_revenue', 'fruit_taste_data'],
-                   summary: 'Listed available tables'
+                   data: catalogs,
+                   summary: `Found ${catalogs.length} catalogs.`
+               };
+          } else if (command.tool === 'list_schemas') {
+               const schemas = await fetchSchemas(params.catalog_name);
+               return {
+                   status: 'success',
+                   data: schemas,
+                   summary: `Found ${schemas.length} schemas in ${params.catalog_name}.`
+               };
+          } else if (command.tool === 'list_tables') {
+               const tables = await fetchTables(params.catalog_name, params.schema_name);
+               return {
+                   status: 'success',
+                   data: tables,
+                   summary: `Found ${tables.length} tables in ${params.catalog_name}.${params.schema_name}.`
+               };
+          } else if (command.tool === 'get_table_schema' || command.tool === 'inspect_table') {
+               const tableDetails = await fetchTableDetails(params.full_table_name);
+               return {
+                   status: 'success',
+                   data: tableDetails,
+                   summary: `Retrieved schema for ${params.full_table_name} with ${tableDetails.columns.length} columns.`
                };
           } else if (command.tool === 'ask_user') {
               // This shouldn't strictly be executed as a tool in the background, 
@@ -499,10 +547,11 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const processResponseLoop = async (initialHistory: Message[]) => {
-      // Create new AbortController for this loop
-      abortControllerRef.current = new AbortController();
-      const signal = abortControllerRef.current.signal;
-
+      // Main controller for User Stop actions
+      const userAbortController = new AbortController();
+      // We store this in the ref so stopGeneration can call .abort() on it
+      abortControllerRef.current = userAbortController;
+      
       let currentHistory = [...initialHistory];
       // Last message in history is the leaf
       let currentParentId = currentHistory[currentHistory.length - 1].id;
@@ -516,7 +565,7 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       try {
         while (continueLoop && loopCount < MAX_LOOPS) {
-            if (signal.aborted) break;
+            if (userAbortController.signal.aborted) break;
             loopCount++;
             
             let currentAssistantMessageId = `${Date.now()}-assistant-${loopCount}`;
@@ -535,6 +584,13 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
             
             let accumulatedResponse = '';
             
+            // Controller for this specific stream request (so we can pause on <<<WAIT>>>)
+            const streamAbortController = new AbortController();
+            
+            // Link user abort to stream abort
+            const onUserAbort = () => streamAbortController.abort();
+            userAbortController.signal.addEventListener('abort', onUserAbort);
+
             try {
                 // Pass Agent Definition to Service
                 await streamChatResponse(
@@ -542,43 +598,59 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     currentAgent, 
                     undefined, // SessionConfig to be added later
                     (chunk) => {
-                        if (signal.aborted) return; 
+                        if (userAbortController.signal.aborted) return; 
                         accumulatedResponse += chunk;
                         dispatch({
                             type: 'RECEIVE_TOKEN',
                             payload: { messageId: currentAssistantMessageId, chunk },
                         });
+                        
+                        // Check for STOP token (<<<WAIT>>>)
+                        const { shouldWait } = parseStreamedContent(accumulatedResponse);
+                        if (shouldWait) {
+                             streamAbortController.abort();
+                        }
                     },
-                    signal
+                    streamAbortController.signal
                 );
             } catch (error: any) {
-                if (error.name === 'AbortError' || signal.aborted) {
-                     console.log("Aborted");
-                     break;
+                if (error.name === 'AbortError' || streamAbortController.signal.aborted) {
+                     console.log("Stream stopped (User or Token)");
+                     // Fallthrough to check for command
+                } else {
+                    console.error("Failed to stream response:", error);
+                    dispatch({
+                        type: 'UPDATE_STREAM',
+                        payload: {
+                        messageId: currentAssistantMessageId,
+                        content: "\n\n*Error: Failed to generate response.*",
+                        },
+                    });
+                    break; 
                 }
-
-                console.error("Failed to stream response:", error);
-                dispatch({
-                    type: 'UPDATE_STREAM',
-                    payload: {
-                    messageId: currentAssistantMessageId,
-                    content: "\n\n*Error: Failed to generate response.*",
-                    },
-                });
-                break; 
+            } finally {
+                userAbortController.signal.removeEventListener('abort', onUserAbort);
             }
 
-            if (signal.aborted) break;
+            if (userAbortController.signal.aborted) break;
 
             const { command } = parseStreamedContent(accumulatedResponse);
             
             // Update history with the full assistant message
-            const assistantMsgFinished: Message = {
+            // Remove <<<WAIT>>> from the stored history to avoid confusing the model on the next turn
+            const cleanContent = accumulatedResponse.replace(/<<<WAIT>>>/g, '').trim();
+            const assistantMsgFinished: TreeMessage = {
                 id: currentAssistantMessageId,
                 role: 'assistant',
-                content: accumulatedResponse,
-                timestamp: new Date()
+                content: cleanContent,
+                timestamp: new Date(),
+                parentId: assistantMessage.parentId,
+                childrenIds: []
             };
+            // We don't need to dispatch update again because UPDATE_STREAM handled the content view,
+            // but we need the clean object for the history state.
+            
+            // Fix: we should update the local history array with the clean content version
             currentHistory = [...currentHistory, assistantMsgFinished];
 
             if (command) {
@@ -620,7 +692,10 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
       } finally {
          abortControllerRef.current = null;
-         dispatch({ type: 'SET_STATUS', payload: 'idle' });
+         // Only reset to idle if we didn't end up in 'awaiting_input' (ask_user)
+         if (state.status !== 'awaiting_input') {
+            dispatch({ type: 'SET_STATUS', payload: 'idle' });
+         }
       }
   };
 
@@ -666,12 +741,7 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const decisionMsg: TreeMessage = {
           id: `${Date.now()}-system-decision`,
           role: 'system',
-          content: JSON.stringify({ 
-              type: 'decision', 
-              inquiryId, 
-              value,
-              summary: `User decided: ${value}`
-          }),
+          content: `System: User decided: ${JSON.stringify(value)} for inquiry ${inquiryId}`,
           timestamp: new Date(),
           parentId: state.currentLeafId,
           childrenIds: []

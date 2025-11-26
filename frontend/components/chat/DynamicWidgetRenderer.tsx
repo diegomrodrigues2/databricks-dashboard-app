@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { WidgetConfig } from '../../types';
+import { WidgetConfig, TableChartWidgetConfig } from '../../types';
 import { getDataForSource, getDashboardConfig, createDashboard, addWidgetToDashboard } from '../../services/dashboardService';
 import { useSpreadsheet } from '../../hooks/useSpreadsheet';
 import BarChartComponent from '../charts/BarChartComponent';
@@ -13,6 +13,7 @@ import DonutChartComponent from '../charts/DonutChartComponent';
 import MarkdownComponent from '../charts/MarkdownComponent';
 import GaugeChartComponent from '../charts/GaugeChartComponent';
 import CodeExecutionWidget from '../widgets/CodeExecutionWidget';
+import { CogIcon } from '../icons/CogIcon';
 
 interface DynamicWidgetRendererProps {
     config: WidgetConfig;
@@ -24,6 +25,7 @@ export const DynamicWidgetRenderer: React.FC<DynamicWidgetRendererProps> = ({ co
     const [data, setData] = useState<any[]>([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [showConfig, setShowConfig] = useState(false);
     const { openSpreadsheet } = useSpreadsheet();
 
     useEffect(() => {
@@ -34,7 +36,17 @@ export const DynamicWidgetRenderer: React.FC<DynamicWidgetRendererProps> = ({ co
             setLoading(true);
             setError(null);
             try {
-                const result = await getDataForSource(config.dataSource);
+                let options = undefined;
+                if (config.type === 'table') {
+                    const tableConfig = config as TableChartWidgetConfig;
+                    if (tableConfig.limit || tableConfig.sort) {
+                        options = {
+                            limit: tableConfig.limit,
+                            sort: tableConfig.sort
+                        };
+                    }
+                }
+                const result = await getDataForSource(config.dataSource, options);
                 setData(result);
             } catch (err) {
                 setError("Failed to load data");
@@ -145,8 +157,23 @@ export const DynamicWidgetRenderer: React.FC<DynamicWidgetRendererProps> = ({ co
     };
 
     return (
-        <div className="my-2 w-full max-w-full overflow-x-auto">
+        <div className="my-2 w-full max-w-full overflow-x-auto relative group">
+            {/* Config Toggle Button */}
+            <button
+                onClick={() => setShowConfig(!showConfig)}
+                className="absolute top-4 right-14 z-10 p-1 rounded-full text-gray-400 hover:bg-gray-700 hover:text-white transition-colors opacity-0 group-hover:opacity-100"
+                title="See Configuration"
+            >
+                <CogIcon className="w-5 h-5" />
+            </button>
+
              {renderChart()}
+
+             {showConfig && (
+                 <div className="mt-2 p-4 bg-gray-950 rounded border border-gray-800 overflow-x-auto text-xs font-mono text-green-400">
+                     <pre>{JSON.stringify(config, null, 2)}</pre>
+                 </div>
+             )}
         </div>
     );
 };

@@ -25,6 +25,15 @@ class TableNode(BaseModel):
     full_name: str
     type: str = "TABLE"
 
+class ColumnNode(BaseModel):
+    name: str
+    type_text: str
+    comment: Optional[str] = None
+
+class TableDetailsNode(TableNode):
+    comment: Optional[str] = None
+    columns: List[ColumnNode]
+
 @router.get("/explorer/catalogs", response_model=List[CatalogNode])
 async def get_catalogs():
     """Retorna a lista de catálogos disponíveis."""
@@ -71,6 +80,33 @@ async def get_tables(
                 full_name=t.get('full_name', f"{t['catalog_name']}.{t['schema_name']}.{t['name']}")
             ) for t in raw_tables
         ]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/explorer/table/{full_table_name}", response_model=TableDetailsNode)
+async def get_table_details(full_table_name: str):
+    """Retorna detalhes completos de uma tabela, incluindo colunas."""
+    try:
+        table_data = databricks_service.get_table(full_table_name)
+        
+        # Mapear colunas
+        columns = [
+            ColumnNode(
+                name=c['name'],
+                type_text=c['type_text'],
+                comment=c.get('comment')
+            ) for c in table_data.get('columns', [])
+        ]
+
+        return TableDetailsNode(
+            name=table_data['name'],
+            catalog_name=table_data['catalog_name'],
+            schema_name=table_data['schema_name'],
+            table_type=table_data['table_type'],
+            full_name=table_data.get('full_name', f"{table_data['catalog_name']}.{table_data['schema_name']}.{table_data['name']}"),
+            comment=table_data.get('comment'),
+            columns=columns
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

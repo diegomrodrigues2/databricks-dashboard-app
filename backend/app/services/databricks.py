@@ -1,135 +1,115 @@
 import requests
 import base64
+import re
+import time
 from app.core.config import get_databricks_config
+from app.services.databricks_mock import databricks_mock_service
 
 class DatabricksService:
-    # Mock data storage
-    _mock_files = {
-        "dbfs:/FileStore/demo_query.sql": "SELECT * FROM samples.nyctaxi.trips LIMIT 10;",
-        "dbfs:/FileStore/readme.md": "# Demo Project\n\nThis is a mock file system.",
-        "dbfs:/FileStore/projects/analysis.sql": "-- Analysis query\nSELECT count(*) FROM sales;"
-    }
-
+    
     def _get_headers(self, config):
         return {
             "Authorization": f"Bearer {config.token}",
             "Content-Type": "application/json"
         }
 
-    def execute_sql(self, query: str):
+    def execute_sql(self, query: str, catalog: str = None, schema: str = None,
+                    format: str = "JSON_ARRAY", disposition: str = "INLINE", wait_timeout: str = "30s"):
+        """
+        Execute SQL query via Databricks SQL Statement Execution API.
+        Handles polling for long-running queries and result chunk retrieval.
+        """
+        # Enforce LIMIT 100 for SELECT queries if not present to avoid large payloads
+        stripped = query.strip()
+        if stripped.upper().startswith("SELECT"):
+            # Check if LIMIT is already present at the end of the query
+            if not re.search(r'LIMIT\s+\d+(\s+OFFSET\s+\d+)?\s*;?$', stripped, re.IGNORECASE):
+                if stripped.endswith(';'):
+                    query = stripped[:-1] + " LIMIT 100;"
+                else:
+                    query = stripped + " LIMIT 100"
+
         config = get_databricks_config()
         if not config:
-            # Mock SQL execution
-            if "samples.nyctaxi.trips" in query:
-                return {
-                    "result": {
-                        "schema": {
-                            "columns": [
-                                {"name": "tpep_pickup_datetime", "type": "string"},
-                                {"name": "tpep_dropoff_datetime", "type": "string"},
-                                {"name": "trip_distance", "type": "double"},
-                                {"name": "fare_amount", "type": "double"},
-                                {"name": "pickup_zip", "type": "int"},
-                                {"name": "dropoff_zip", "type": "int"}
-                            ]
-                        },
-                        "data_array": [
-                            ["2023-01-01 00:00:00", "2023-01-01 00:15:00", 2.5, 15.0, 10001, 10002],
-                            ["2023-01-01 00:10:00", "2023-01-01 00:35:00", 5.1, 25.5, 10003, 10004],
-                            ["2023-01-01 00:20:00", "2023-01-01 00:25:00", 0.8, 7.0, 10001, 10001]
-                        ]
-                    }
-                }
-            elif "main.default.users" in query:
-                return {
-                    "result": {
-                        "schema": {
-                            "columns": [
-                                {"name": "id", "type": "int"},
-                                {"name": "name", "type": "string"},
-                                {"name": "email", "type": "string"},
-                                {"name": "created_at", "type": "string"}
-                            ]
-                        },
-                        "data_array": [
-                            [1, "John Doe", "john@example.com", "2023-01-01"],
-                            [2, "Jane Smith", "jane@example.com", "2023-01-02"],
-                            [3, "Bob Johnson", "bob@example.com", "2023-01-03"]
-                        ]
-                    }
-                }
-            elif "main.default.transactions" in query:
-                return {
-                    "result": {
-                        "schema": {
-                            "columns": [
-                                {"name": "transaction_id", "type": "string"},
-                                {"name": "amount", "type": "double"},
-                                {"name": "currency", "type": "string"}
-                            ]
-                        },
-                        "data_array": [
-                            ["tx_001", 100.50, "USD"],
-                            ["tx_002", 50.25, "EUR"],
-                            ["tx_003", 200.00, "USD"]
-                        ]
-                    }
-                }
-
-            return {
-                "result": {
-                    "schema": {"columns": [{"name": "result", "type": "string"}]},
-                    "data_array": [["Mock query executed successfully"]]
-                }
-            }
+            return databricks_mock_service.execute_sql(query)
 
         url = f"{config.host.rstrip('/')}/api/2.0/sql/statements"
         headers = self._get_headers(config)
+        
         payload = {
             "statement": query,
             "warehouse_id": config.warehouse_id,
-            "wait_timeout": "30s" 
+            "format": format,
+            "disposition": disposition,
+            "wait_timeout": wait_timeout
         }
+        if catalog:
+            payload["catalog"] = catalog
+        if schema:
+            payload["schema"] = schema
 
+        # Submit the query
         response = requests.post(url, json=payload, headers=headers)
         response.raise_for_status()
-        return response.json()
+        meta = response.json()
+
+        statement_id = meta.get("statement_id")
+        status = meta.get("status", {})
+        state = status.get("state")
+
+        # If result is already present (small/fast query with INLINE disposition), return it
+        if meta.get("result") is not None and meta.get("manifest") is not None:
+            return meta
+
+        # Otherwise, poll until the statement completes
+        poll_url = f"{url}/{statement_id}"
+        max_poll_attempts = 60  # Max ~60 seconds of polling
+        poll_count = 0
+        
+        while state not in ("SUCCEEDED", "FAILED", "CANCELED", "CLOSED"):
+            if poll_count >= max_poll_attempts:
+                raise RuntimeError(f"Query timeout: statement {statement_id} did not complete in time")
+            
+            time.sleep(1)
+            poll_count += 1
+            
+            resp = requests.get(poll_url, headers=headers)
+            resp.raise_for_status()
+            meta = resp.json()
+            status = meta.get("status", {})
+            state = status.get("state")
+
+        if state != "SUCCEEDED":
+            error_msg = status.get("error", {}).get("message", "Unknown error")
+            raise RuntimeError(f"Statement {statement_id} finished with state {state}: {error_msg}")
+
+        # If we have inline results, return them
+        if meta.get("result") is not None:
+            return meta
+
+        # For EXTERNAL_LINKS disposition or when we need to fetch chunks
+        result_url = f"{poll_url}/result/chunks/0"
+        resp = requests.get(result_url, headers=headers)
+        resp.raise_for_status()
+        chunk = resp.json()
+
+        # Handle external links if present
+        if chunk.get("external_links"):
+            link = chunk["external_links"][0]["external_link"]
+            ext_resp = requests.get(link)
+            ext_resp.raise_for_status()
+            # Merge the external data back into the response structure
+            meta["result"] = {"data_array": ext_resp.json()}
+            return meta
+
+        # Merge chunk data into meta
+        meta["result"] = chunk
+        return meta
 
     def list_directory(self, path: str):
         config = get_databricks_config()
         if not config:
-            # Mock directory listing
-            files = []
-            # Ensure path has trailing slash for matching
-            search_path = path.rstrip('/') + '/'
-            seen_dirs = set()
-
-            for file_path, content in self._mock_files.items():
-                if file_path.startswith(search_path):
-                    rel_path = file_path[len(search_path):]
-                    parts = rel_path.split('/')
-                    
-                    name = parts[0]
-                    full_path = search_path + name
-                    
-                    if len(parts) > 1:
-                        # It's a directory
-                        if name not in seen_dirs:
-                            files.append({
-                                "path": full_path,
-                                "is_dir": True,
-                                "file_size": 0
-                            })
-                            seen_dirs.add(name)
-                    else:
-                        # It's a file
-                        files.append({
-                            "path": full_path,
-                            "is_dir": False,
-                            "file_size": len(content)
-                        })
-            
-            return {"files": files}
+            return databricks_mock_service.list_directory(path)
 
         url = f"{config.host.rstrip('/')}/api/2.0/dbfs/list"
         headers = self._get_headers(config)
@@ -145,10 +125,7 @@ class DatabricksService:
     def read_file(self, path: str):
         config = get_databricks_config()
         if not config:
-            # Mock read file
-            if path in self._mock_files:
-                return {"path": path, "content": self._mock_files[path]}
-            raise ValueError(f"File not found in mock: {path}")
+            return databricks_mock_service.read_file(path)
 
         url = f"{config.host.rstrip('/')}/api/2.0/dbfs/read"
         headers = self._get_headers(config)
@@ -171,11 +148,7 @@ class DatabricksService:
     def write_file(self, path: str, content: str, overwrite: bool = True):
         config = get_databricks_config()
         if not config:
-            # Mock write file
-            if not overwrite and path in self._mock_files:
-                raise ValueError("File already exists")
-            self._mock_files[path] = content
-            return {"message": "File saved successfully (Mock)", "path": path}
+            return databricks_mock_service.write_file(path, content, overwrite)
 
         url = f"{config.host.rstrip('/')}/api/2.0/dbfs/put"
         headers = self._get_headers(config)
@@ -201,11 +174,7 @@ class DatabricksService:
         """
         config = get_databricks_config()
         if not config:
-            # Mock catalogs
-            return [
-                {"name": "main", "comment": "Main catalog"},
-                {"name": "samples", "comment": "Sample datasets"}
-            ]
+            return databricks_mock_service.list_catalogs()
 
         url = f"{config.host.rstrip('/')}/api/2.1/unity-catalog/catalogs"
         headers = self._get_headers(config)
@@ -243,18 +212,7 @@ class DatabricksService:
         """
         config = get_databricks_config()
         if not config:
-            # Mock schemas
-            if catalog_name == "main":
-                return [
-                    {"name": "default", "catalog_name": "main", "comment": "Default schema"},
-                    {"name": "analytics", "catalog_name": "main", "comment": "Analytics data"}
-                ]
-            elif catalog_name == "samples":
-                return [
-                    {"name": "nyctaxi", "catalog_name": "samples", "comment": "NYC Taxi data"},
-                    {"name": "tpch", "catalog_name": "samples", "comment": "TPC-H benchmark data"}
-                ]
-            return []
+            return databricks_mock_service.list_schemas(catalog_name)
 
         url = f"{config.host.rstrip('/')}/api/2.1/unity-catalog/schemas"
         headers = self._get_headers(config)
@@ -290,17 +248,7 @@ class DatabricksService:
         """
         config = get_databricks_config()
         if not config:
-            # Mock tables
-            if catalog_name == "samples" and schema_name == "nyctaxi":
-                 return [
-                    {"name": "trips", "catalog_name": "samples", "schema_name": "nyctaxi", "table_type": "MANAGED", "full_name": "samples.nyctaxi.trips"}
-                 ]
-            elif catalog_name == "main" and schema_name == "default":
-                 return [
-                     {"name": "users", "catalog_name": "main", "schema_name": "default", "table_type": "MANAGED", "full_name": "main.default.users"},
-                     {"name": "transactions", "catalog_name": "main", "schema_name": "default", "table_type": "EXTERNAL", "full_name": "main.default.transactions"}
-                 ]
-            return []
+            return databricks_mock_service.list_tables(catalog_name, schema_name)
         
         url = f"{config.host.rstrip('/')}/api/2.1/unity-catalog/tables"
         headers = self._get_headers(config)
@@ -332,5 +280,24 @@ class DatabricksService:
                 raise ValueError(f"Falha ao listar tabelas: {str(e)}")
         
         return tables
+
+    def get_table(self, full_table_name: str):
+        """
+        Recupera metadados de uma tabela específica, incluindo colunas.
+        Endpoint: GET /api/2.1/unity-catalog/tables/{full_name}
+        """
+        config = get_databricks_config()
+        if not config:
+            return databricks_mock_service.get_table(full_table_name)
+
+        url = f"{config.host.rstrip('/')}/api/2.1/unity-catalog/tables/{full_table_name}"
+        headers = self._get_headers(config)
+        
+        try:
+            response = requests.get(url, headers=headers)
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            raise ValueError(f"Falha ao recuperar detalhes da tabela: {str(e)}")
 
 databricks_service = DatabricksService()

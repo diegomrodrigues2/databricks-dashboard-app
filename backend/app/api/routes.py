@@ -47,20 +47,23 @@ async def execute_query(request: QueryRequest):
     try:
         result = databricks_service.execute_sql(request.query)
         
-        # Transform Databricks SQL API response to a simpler format if needed
-        # The frontend expects { result: ... } or similar. 
-        # The standard response has 'result' key with 'data_array' and 'schema'.
+        # Transform Databricks SQL API response to a simpler format
+        # The API response structure:
+        # - manifest.schema.columns: column definitions
+        # - result.data_array: the actual data rows
         
-        if 'result' in result:
-             columns = [col['name'] for col in result['result']['schema']['columns']]
-             data = []
-             for row in result['result']['data_array']:
-                 row_dict = {}
-                 for i, val in enumerate(row):
-                     row_dict[columns[i]] = val
-                 data.append(row_dict)
-             return {"data": data}
+        if 'manifest' in result and 'result' in result:
+            columns = [col['name'] for col in result['manifest']['schema']['columns']]
+            data_array = result['result'].get('data_array', [])
+            data = []
+            for row in data_array:
+                row_dict = {}
+                for i, val in enumerate(row):
+                    row_dict[columns[i]] = val
+                data.append(row_dict)
+            return {"data": data}
         
+        # Fallback for mock service or unexpected response format
         return result
 
     except Exception as e:

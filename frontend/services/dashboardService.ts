@@ -1,5 +1,6 @@
-import type { Dashboard, AppConfig, WidgetConfig } from '../types';
+import type { Dashboard, AppConfig, WidgetConfig, SortConfig } from '../types';
 import { executeQuery } from './api';
+import { cacheService } from './cacheService';
 import { fruitSalesDashboardConfig } from './dashboards/fruitSales';
 import {
     getAllDashboards,
@@ -110,7 +111,30 @@ export const updateDashboardLayout = async (dashboardId: string, widgets: Widget
     await saveDashboard(stored);
 };
 
-export const getDataForSource = (sourceName: string): Promise<any[]> => {
+const applyOptions = (data: any[], options?: { limit?: number, sort?: SortConfig[] }) => {
+    if (!data || !Array.isArray(data)) return data;
+    let result = [...data];
+
+    if (options?.sort && options.sort.length > 0) {
+        result.sort((a, b) => {
+            for (const sort of options.sort!) {
+                const valA = a[sort.column];
+                const valB = b[sort.column];
+                if (valA < valB) return sort.direction === 'asc' ? -1 : 1;
+                if (valA > valB) return sort.direction === 'asc' ? 1 : -1;
+            }
+            return 0;
+        });
+    }
+
+    if (options?.limit && options.limit > 0) {
+        result = result.slice(0, options.limit);
+    }
+
+    return result;
+};
+
+const getStaticDataForSource = (sourceName: string): Promise<any[]> | null => {
     switch (sourceName) {
         case 'fruit_sales':
             return getFruitSalesData();
@@ -156,9 +180,52 @@ export const getDataForSource = (sourceName: string): Promise<any[]> => {
             return getFruitShelfLifeData();
         case 'fruit_basket_stock':
             return getFruitBasketCorpStockData();
-        default:
-            return Promise.resolve([]);
     }
+    return null;
+};
+
+export const getDataForSource = (sourceName: string, options?: { limit?: number, sort?: SortConfig[] }): Promise<any[]> => {
+    const staticDataPromise = getStaticDataForSource(sourceName);
+    if (staticDataPromise) {
+        return staticDataPromise.then(data => applyOptions(data, options));
+    }
+
+    // Check cache first
+    const cachedData = cacheService.getCachedData(sourceName);
+    if (cachedData) {
+        return Promise.resolve(applyOptions(cachedData, options));
+    }
+
+    // If sourceName looks like a table (e.g. "catalog.schema.table"), try to fetch it
+    if (sourceName.includes('.') && sourceName.split('.').length >= 2) {
+        let query = `SELECT * FROM ${sourceName}`;
+        
+        if (options?.sort && options.sort.length > 0) {
+             const orderBy = options.sort.map(s => `${s.column} ${s.direction.toUpperCase()}`).join(', ');
+             query += ` ORDER BY ${orderBy}`;
+        }
+        
+        if (options?.limit && options.limit > 0) {
+             query += ` LIMIT ${options.limit}`;
+        } else {
+             query += ` LIMIT 1000`;
+        }
+
+        return executeRawQuery(query, 'sql').then(data => {
+            // Cache the result if successful and no specific options used (as it might be a partial view)
+            if (Array.isArray(data) && data.length > 0 && !data[0].error) {
+                if (!options) {
+                    cacheService.cacheData(sourceName, data);
+                }
+            }
+            return data;
+        }).catch(err => {
+            console.error(`Failed to fetch dynamic table ${sourceName}:`, err);
+            return [];
+        });
+    }
+    
+    return Promise.resolve([]);
 };
 
 export const executeRawQuery = async (query: string, language: string): Promise<any[]> => {

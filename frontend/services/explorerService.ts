@@ -19,6 +19,17 @@ export interface Table {
   full_name: string;
 }
 
+export interface Column {
+  name: string;
+  type_text: string;
+  comment?: string;
+}
+
+export interface TableDetails extends Table {
+  comment?: string;
+  columns: Column[];
+}
+
 const BASE_URL = 'http://localhost:8000/api';
 
 // Helper function to handle API calls
@@ -68,6 +79,22 @@ const fetchApi = async <T>(endpoint: string): Promise<T> => {
             return [] as unknown as T;
         }
 
+        if (endpoint.includes('/explorer/table/')) {
+             // Mock table details
+             return {
+                 name: "trips",
+                 catalog_name: "samples",
+                 schema_name: "nyctaxi",
+                 table_type: "MANAGED",
+                 full_name: "samples.nyctaxi.trips",
+                 comment: "Mock Table Details",
+                 columns: [
+                     { name: "tpep_pickup_datetime", type_text: "TIMESTAMP", comment: "Pickup time" },
+                     { name: "trip_distance", type_text: "DOUBLE", comment: "Distance" }
+                 ]
+             } as unknown as T;
+        }
+        
         throw error;
     }
 };
@@ -82,5 +109,9 @@ export const fetchSchemas = async (catalog: string): Promise<Schema[]> => {
 
 export const fetchTables = async (catalog: string, schema: string): Promise<Table[]> => {
   return fetchApi<Table[]>(`/explorer/tables?catalog_name=${encodeURIComponent(catalog)}&schema_name=${encodeURIComponent(schema)}`);
+};
+
+export const fetchTableDetails = async (fullTableName: string): Promise<TableDetails> => {
+  return fetchApi<TableDetails>(`/explorer/table/${encodeURIComponent(fullTableName)}`);
 };
 

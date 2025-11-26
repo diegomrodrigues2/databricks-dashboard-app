@@ -3,6 +3,7 @@ import Editor from '@monaco-editor/react';
 import { ExplorerSidebar } from '../components/explorer/ExplorerSidebar';
 import Spreadsheet from '../components/spreadsheet/Spreadsheet'; // Reutilizando componente existente
 import { executeRawQuery } from '../services/dashboardService'; // Serviço que chama /api/query
+import { cacheService } from '../services/cacheService';
 import { DatabaseIcon } from '../components/icons/DatabaseIcon';
 import { XIcon } from '../components/icons/XIcon';
 import { ChevronDownIcon } from '../components/icons/ChevronDownIcon';
@@ -41,6 +42,7 @@ const DatabaseExplorerPage: React.FC<DatabaseExplorerPageProps> = ({ onNavigate 
       // Reutiliza o serviço existente que bate no endpoint SQL Statement Execution
       const result = await executeRawQuery(query, 'sql');
       setTableData(result);
+      cacheService.cacheData(table.full_name, result);
     } catch (err) {
       console.error("Falha ao carregar dados da tabela", err);
       setError("Não foi possível carregar os dados. Verifique suas permissões ou se o SQL Warehouse está ativo.");

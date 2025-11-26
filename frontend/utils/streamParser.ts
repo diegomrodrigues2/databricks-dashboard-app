@@ -8,6 +8,7 @@ export interface ParsedStreamResult {
         tool: string;
         params: string;
     };
+    shouldWait?: boolean;
 }
 
 /**
@@ -21,6 +22,7 @@ export function parseStreamedContent(content: string): ParsedStreamResult {
     const parts: (TextPart | WidgetPart)[] = [];
     let thought = '';
     let command: { tool: string; params: string } | undefined;
+    let shouldWait = false;
 
     let cursor = 0;
     const length = content.length;
@@ -36,6 +38,8 @@ export function parseStreamedContent(content: string): ParsedStreamResult {
         const widgetTagStart = remaining.indexOf('<widget>');
         const sqlBlockStartMatch = remaining.match(/```sql\s/); 
         const sqlBlockStart = sqlBlockStartMatch ? sqlBlockStartMatch.index! : -1;
+        const waitTokenMatch = remaining.match(/<<<WAIT>>>/);
+        const waitTokenIndex = waitTokenMatch ? waitTokenMatch.index! : -1;
 
         // We need to find the *closest* one that is valid
         const indices = [
@@ -43,7 +47,8 @@ export function parseStreamedContent(content: string): ParsedStreamResult {
             { type: 'command', index: commandStart },
             { type: 'widget_token', index: widgetStartTokenIdx },
             { type: 'widget_tag', index: widgetTagStart },
-            { type: 'sql', index: sqlBlockStart }
+            { type: 'sql', index: sqlBlockStart },
+            { type: 'wait', index: waitTokenIndex }
         ].filter(x => x.index !== -1).sort((a, b) => a.index - b.index);
 
         if (indices.length === 0) {
@@ -65,7 +70,13 @@ export function parseStreamedContent(content: string): ParsedStreamResult {
         cursor += nextTag.index;
         const currentRemaining = content.slice(cursor);
 
-        if (nextTag.type === 'thought') {
+        if (nextTag.type === 'wait') {
+            shouldWait = true;
+            // Consume token
+            cursor += '<<<WAIT>>>'.length;
+            // We stop parsing here as per protocol? Or just flag it?
+            // Protocol says "stop generation".
+        } else if (nextTag.type === 'thought') {
              const endTag = '</thought>';
              const endIdx = currentRemaining.indexOf(endTag);
              if (endIdx !== -1) {
@@ -169,5 +180,5 @@ export function parseStreamedContent(content: string): ParsedStreamResult {
         }
     }
     
-    return { parts, thought, command };
+    return { parts, thought, command, shouldWait };
 }

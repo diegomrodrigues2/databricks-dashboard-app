@@ -242,6 +242,11 @@ export interface ConditionalFormattingRule {
     colorScheme: [string, string]; // [minColor, maxColor]
 }
 
+export interface SortConfig {
+    column: string;
+    direction: 'asc' | 'desc';
+}
+
 export interface TableChartColumnConfig {
     key: string;
     header: string;
@@ -257,6 +262,8 @@ export interface TableChartWidgetConfig extends BaseWidgetConfig {
     rowCategoryColumn: string;
     columns: TableChartColumnConfig[];
     conditionalFormatting?: ConditionalFormattingRule[];
+    limit?: number;
+    sort?: SortConfig[];
 }
 
 // --- Data Table Conditional Formatting Types ---

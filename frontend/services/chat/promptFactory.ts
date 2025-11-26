@@ -13,8 +13,18 @@ export function generateSystemPrompt(
   const toolsInfo = getToolsContext(sessionConfig, agent);
   const agentPersona = getAgentPersona(agent);
 
+  let personaConstraints = "";
+  if (agent?.id === 'data_engineer') {
+      personaConstraints = "\nCONSTRAINT: You are a Data Engineer. Prefer showing raw tables, schemas, and SQL code. Avoid decorative charts unless explicitly requested.";
+  } else if (agent?.id === 'data_analyst') {
+      personaConstraints = "\nCONSTRAINT: You are a Data Analyst. Always try to visualize data with charts (bar, line, scatter) when possible. Focus on insights.";
+  } else if (agent?.id === 'executive_assistant') {
+      personaConstraints = "\nCONSTRAINT: You are an Executive Assistant. Provide high-level summaries and KPIs. Avoid technical jargon and raw code.";
+  }
+
   // Construct the full prompt
   return `${agentPersona}
+${personaConstraints}
 
 You have access to the following data sources:
 ${dataSourcesInfo}
@@ -25,13 +35,5 @@ ${toolsInfo}
 ${XML_PROTOCOL_INSTRUCTIONS}
 
 ${WIDGET_SCHEMA_DEFINITION}
-
-When answering user queries:
-1. Use <thought> tags to plan your actions.
-2. Use <command tool="tool_name">JSON_PARAMS</command> to execute tools.
-3. If the user asks for a visualization, look for a relevant data source and generate a widget configuration.
-4. Always specify the "dataSource" property matching one of the available source names.
-5. If no visualization is needed, just reply in plain text (Markdown is supported).
-6. Do NOT fabricate data columns that don't logically exist in the described data sources.
 `;
 }
